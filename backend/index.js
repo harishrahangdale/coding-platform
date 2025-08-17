@@ -5,7 +5,9 @@ const axios = require('axios');
 require('dotenv').config();
 
 const app = express();
-app.use(cors());
+app.use(cors({
+  origin: "https://68a23002d9c0b6ab29f97451--friendly-youtiao-9b4c9c.netlify.app"
+}));
 app.use(express.json());
 
 // MongoDB Connection
