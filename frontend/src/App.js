@@ -7,14 +7,17 @@ function App() {
   const [questions, setQuestions] = useState([]);
   const [selectedQuestion, setSelectedQuestion] = useState(null);
 
+  // Base URL for backend API (deployed on Render)
+  const API_BASE_URL = "https://coding-platform-teq9.onrender.com/api";
+
   useEffect(() => {
-    axios.get('http://localhost:5050/api/questions')
+    axios.get(`${API_BASE_URL}/questions`)
       .then(res => setQuestions(res.data))
       .catch(err => console.error('Error fetching questions:', err));
   }, []);
 
   const handleQuestionSelect = (id) => {
-    axios.get(`http://localhost:5050/api/questions/${id}`)
+    axios.get(`${API_BASE_URL}/questions/${id}`)
       .then(res => setSelectedQuestion(res.data))
       .catch(err => console.error('Error fetching question:', err));
   };

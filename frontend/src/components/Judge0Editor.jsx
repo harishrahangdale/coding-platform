@@ -50,7 +50,7 @@ public class Main {
     onRunStart && onRunStart();
 
     try {
-      const res = await axios.post(`http://localhost:5050/api/run/${selectedQuestion._id}`, {
+      const res = await axios.post(`https://coding-platform-teq9.onrender.com/api/run/${selectedQuestion._id}`, {
         finalCode: code,          // ✅ send full code
         language_id: languageId,
       });
