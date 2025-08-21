@@ -1,10 +1,15 @@
 // models/Question.js
 const mongoose = require("mongoose");
 
+// Define a schema for test cases
+// Allow empty strings; coerce null/undefined to ""
+// This ensures that if input/output is not provided, it defaults to an empty string
+// This is useful for cases where the test case might not have an input or output defined.
 const testCaseSchema = new mongoose.Schema(
   {
-    input: { type: String, required: true },
-    output: { type: String, required: true },
+    // Allow empty strings; coerce null/undefined to ""
+    input:  { type: String, default: "", set: v => (v == null ? "" : String(v)) },
+    output: { type: String, default: "", set: v => (v == null ? "" : String(v)) },
     score: { type: Number, default: 1 },
     explanation: { type: String, default: "" },
     visible: { type: Boolean, default: false },
