@@ -170,7 +170,6 @@ app.get("/api/questions/:id/scaffold/:languageId", async (req, res) => {
  */
 app.post("/api/run/:id", async (req, res) => {
   const { id } = req.params;
-  // Accept either camelCase or snake_case from FE
   const finalCode = req.body.finalCode || req.body.source_code;
   const languageId = Number(req.body.languageId ?? req.body.language_id);
 
@@ -185,10 +184,7 @@ app.post("/api/run/:id", async (req, res) => {
     const question = await Question.findById(id).lean();
     if (!question) return res.status(404).json({ error: "Question not found" });
 
-    const testCases = Array.isArray(question.testCases)
-      ? question.testCases
-      : [];
-
+    const testCases = Array.isArray(question.testCases) ? question.testCases : [];
     if (testCases.length === 0) {
       return res.status(400).json({ error: "No test cases configured for this question" });
     }
@@ -197,20 +193,16 @@ app.post("/api/run/:id", async (req, res) => {
     let earnedScore = 0;
     const maxScore = testCases.reduce((s, t) => s + (t.score || 0), 0);
 
-    // Run sequentially to keep things simple & respect rate limits.
     for (const [idx, tc] of testCases.entries()) {
       const stdin = String(tc.input ?? "");
       const expected = String(tc.output ?? "").trim();
 
-      // Submit to Judge0 (wait=true to get result immediately)
       const { data: submission } = await judge0.post(
         "/submissions?base64_encoded=false&wait=true",
         {
           source_code: finalCode,
           language_id: languageId,
           stdin,
-          // NOTE: Judge0 community API may not expose time/memory per submission limits via RapidAPI.
-          // If you self-host Judge0, you can pass cpu_time_limit/memory_limit here.
         }
       );
 
@@ -219,11 +211,9 @@ app.post("/api/run/:id", async (req, res) => {
       let statusNote = submission?.status?.description || "";
 
       if (submission?.status?.id === 3) {
-        // Accepted
         actual = (submission.stdout || "").trim();
         status = actual === expected ? "Passed" : "Failed";
       } else {
-        // Non-AC: inspect compile_output / stderr / message
         if (submission.status.id === 6) {
           actual = `Compilation Error: ${(submission.compile_output || "").trim()}`;
         } else if ([7, 8, 9, 10, 11, 12, 14].includes(submission.status.id)) {
@@ -248,8 +238,11 @@ app.post("/api/run/:id", async (req, res) => {
       });
     }
 
+    // Only expose visible test cases to the UI
+    const publicResults = results.filter(r => r.visible);
+
     res.json({
-      results,
+      publicResults, // <= UI should render from this
       summary: {
         passed: results.filter(r => r.status === "Passed").length,
         total: results.length,

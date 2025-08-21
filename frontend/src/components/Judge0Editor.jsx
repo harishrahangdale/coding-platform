@@ -2,44 +2,57 @@ import React, { useState, useEffect, useMemo } from "react";
 import Editor from "@monaco-editor/react";
 import axios from "axios";
 
-// Map Judge0 languageId -> Monaco language id
-// Extend as you add more languages in your seed.
 const JUDGE0_TO_MONACO = {
-  50: "c",            // C (GCC)
-  54: "cpp",          // C++ (GCC)
-  62: "java",         // Java 17
-  63: "javascript",   // Node.js
-  71: "python",       // Python 3
-  75: "csharp",       // .NET (if you add)
+  50: "c",
+  54: "cpp",
+  62: "java",
+  63: "javascript",
+  71: "python",
 };
 
+const attemptsKey = (questionId) => `attempts:${questionId}`;
+
 export default function Judge0Editor({
-  apiBaseUrl,            // e.g., "https://coding-platform-teq9.onrender.com/api"
-  selectedQuestion,      // question doc from /api/questions/:id
+  apiBaseUrl,
+  selectedQuestion,
   onRunStart,
   onRunFinish,
 }) {
   const [languageId, setLanguageId] = useState(null);
-  const [theme, setTheme] = useState("vs"); // "vs" | "vs-dark"
+  const [theme, setTheme] = useState("vs");
   const [code, setCode] = useState("");
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
+
+  // attempts UI state
+  const [attemptsUsed, setAttemptsUsed] = useState(0);
+  const maxAttempts = selectedQuestion?.maxAttempts ?? 3;
+  const remaining = Math.max(0, maxAttempts - attemptsUsed);
+  const attemptsExhausted = remaining <= 0;
 
   const monacoLanguage = useMemo(() => {
     if (!languageId) return "plaintext";
     return JUDGE0_TO_MONACO[languageId] || "plaintext";
   }, [languageId]);
 
-  // When a new question is selected, default to its first available language
+  // Reset language & load attempts when question changes
   useEffect(() => {
-    if (!selectedQuestion) return;
+    if (!selectedQuestion?._id) return;
 
     const langs = selectedQuestion.languages || [];
-    const defaultLangId = langs.length ? langs[0].languageId : 62; // fallback Java 17
+    const defaultLangId = langs.length ? langs[0].languageId : 62;
     setLanguageId(defaultLangId);
-  }, [selectedQuestion?._id]); // reset when question changes
 
-  // Fetch scaffold whenever question or language changes
+    // load attempts from localStorage
+    const used = Number(localStorage.getItem(attemptsKey(selectedQuestion._id)) || 0);
+    setAttemptsUsed(isNaN(used) ? 0 : used);
+
+    // clear editor code until scaffold loads
+    setCode("");
+    setOutput("");
+  }, [selectedQuestion?._id]);
+
+  // Fetch scaffold on question/language change
   useEffect(() => {
     const fetchScaffold = async () => {
       if (!selectedQuestion?._id || !languageId) return;
@@ -48,13 +61,16 @@ export default function Judge0Editor({
           `${apiBaseUrl}/questions/${selectedQuestion._id}/scaffold/${languageId}`
         );
         setCode(data?.body || "");
-      } catch (err) {
-        // If no scaffold exists, start with empty template
+      } catch {
         setCode("");
       }
     };
     fetchScaffold();
   }, [selectedQuestion?._id, languageId, apiBaseUrl]);
+
+  const persistAttempts = (qId, next) => {
+    localStorage.setItem(attemptsKey(qId), String(next));
+  };
 
   const runCode = async () => {
     if (!selectedQuestion?._id) {
@@ -65,6 +81,10 @@ export default function Judge0Editor({
       setOutput("Please select a language.");
       return;
     }
+    if (attemptsExhausted) {
+      setOutput(`You've used all ${maxAttempts} attempts for this question.`);
+      return;
+    }
 
     setIsRunning(true);
     setOutput("Running...");
@@ -73,21 +93,25 @@ export default function Judge0Editor({
     try {
       const res = await axios.post(
         `${apiBaseUrl}/run/${selectedQuestion._id}`,
-        {
-          finalCode: code,
-          languageId, // backend accepts camelCase or snake_case
-        }
+        { finalCode: code, languageId }
       );
 
-      const { results = [], summary = {} } = res.data || {};
+      // Use only publicResults (hidden tests are filtered out by backend)
+      const publicResults = res.data.publicResults || res.data.results || [];
+      const summary = res.data.summary || {};
+
       const text =
-        results
-          .map(
-            (r, i) =>
-              `Test Case ${i + 1}: ${r.status}\nInput: ${r.input}\nExpected: ${r.expected}\nGot: ${r.actual || "No output"}\nScore: ${r.score}/${r.maxScore}\n`
-          )
-          .join("\n") +
-        `\nSummary: ${summary.message || `${summary.earnedScore}/${summary.maxScore} points`}`;
+        (publicResults.length
+          ? publicResults
+              .map(
+                (r, i) =>
+                  `Test Case ${r.index ?? i + 1}: ${r.status}\n` +
+                  `Input: ${r.input}\nExpected: ${r.expected}\nGot: ${r.actual || "No output"}\n` +
+                  `Score: ${r.score}/${r.maxScore}\n`
+              )
+              .join("\n")
+          : "No public test cases to display.") +
+        `\nSummary: ${summary.message || ""}`;
 
       setOutput(text);
       onRunFinish && onRunFinish(res.data);
@@ -95,17 +119,35 @@ export default function Judge0Editor({
       setOutput(`Error: ${err.response?.data?.error || err.message}`);
       onRunFinish && onRunFinish(null, err);
     } finally {
+      // Count this as an attempt (success or error), then disable if needed
+      const next = Math.min(maxAttempts, attemptsUsed + 1);
+      setAttemptsUsed(next);
+      persistAttempts(selectedQuestion._id, next);
+
       setIsRunning(false);
     }
   };
 
   const toggleTheme = () => setTheme((prev) => (prev === "vs" ? "vs-dark" : "vs"));
   const isDark = theme === "vs-dark";
-
-  const languages = selectedQuestion?.languages || []; // [{languageId, languageName}]
+  const languages = selectedQuestion?.languages || [];
 
   return (
     <div className="h-full w-full flex flex-col gap-3">
+      {/* Attempts info */}
+      {selectedQuestion?._id && (
+        <div
+          className={`text-sm p-2 rounded border ${
+            attemptsExhausted
+              ? "bg-red-50 border-red-200 text-red-700"
+              : "bg-yellow-50 border-yellow-200 text-yellow-800"
+          }`}
+        >
+          Attempts used: <b>{attemptsUsed}</b> / {maxAttempts}{" "}
+          {attemptsExhausted && "• No more attempts left."}
+        </div>
+      )}
+
       {/* Controls */}
       <div className="flex flex-wrap items-center gap-3">
         {/* Language dropdown */}
@@ -115,6 +157,7 @@ export default function Judge0Editor({
             className="border rounded px-2 py-1"
             value={languageId ?? ""}
             onChange={(e) => setLanguageId(Number(e.target.value))}
+            disabled={attemptsExhausted}
           >
             {languages.map((l) => (
               <option key={l.languageId} value={l.languageId}>
@@ -126,12 +169,15 @@ export default function Judge0Editor({
 
         <button
           onClick={runCode}
-          disabled={isRunning}
+          disabled={isRunning || attemptsExhausted}
           className={`px-4 py-2 rounded text-white ${
-            isRunning ? "bg-gray-400" : "bg-blue-600 hover:bg-blue-700"
+            isRunning || attemptsExhausted
+              ? "bg-gray-400 cursor-not-allowed"
+              : "bg-blue-600 hover:bg-blue-700"
           }`}
+          title={attemptsExhausted ? "No attempts left" : "Run your code"}
         >
-          {isRunning ? "Running..." : "Run Code"}
+          {isRunning ? "Running..." : attemptsExhausted ? "No Attempts Left" : "Run Code"}
         </button>
 
         <button
@@ -156,6 +202,7 @@ export default function Judge0Editor({
             minimap: { enabled: false },
             wordWrap: "on",
             automaticLayout: true,
+            readOnly: attemptsExhausted,
           }}
         />
       </div>
