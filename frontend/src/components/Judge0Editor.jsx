@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import Editor from "@monaco-editor/react";
 import axios from "axios";
 
@@ -11,6 +11,55 @@ const JUDGE0_TO_MONACO = {
 };
 
 const attemptsKey = (questionId) => `attempts:${questionId}`;
+
+// ---------- helpers: diagnostics ----------
+function parseErrorToMarkers(msg = "", language = "plaintext") {
+  const markers = [];
+  const text = String(msg);
+
+  // Common defaults
+  const push = (line = 1, column = 1, message = text) =>
+    markers.push({
+      startLineNumber: Math.max(1, Number(line) || 1),
+      startColumn: Math.max(1, Number(column) || 1),
+      endLineNumber: Math.max(1, Number(line) || 1),
+      endColumn: Math.max(2, Number(column) || 1) + 1,
+      message,
+      severity: 8, // monaco.MarkerSeverity.Error
+    });
+
+  // Java / C / C++ gcc/javac style: "Main.java:12: error: ..." or "main.c:7:..."
+  let m = text.match(/:[ ]?(\d+):/);
+  if (m) {
+    push(Number(m[1]), 1, text);
+    return markers;
+  }
+
+  // Java stack traces: "at pkg.Class.method(Class.java:123)"
+  m = text.match(/\((.+?):(\d+)\)/);
+  if (m) {
+    push(Number(m[2]), 1, text);
+    return markers;
+  }
+
+  // Python: 'File "stdin", line 5' or 'File "Main.py", line 5'
+  m = text.match(/File ".*?", line (\d+)/);
+  if (m) {
+    push(Number(m[1]), 1, text);
+    return markers;
+  }
+
+  // Node.js: "at <anonymous>:12:5"
+  m = text.match(/<anonymous>:(\d+):(\d+)/);
+  if (m) {
+    push(Number(m[1]), Number(m[2]), text);
+    return markers;
+  }
+
+  // Fallback: show at top
+  push(1, 1, text);
+  return markers;
+}
 
 export default function Judge0Editor({
   apiBaseUrl,
@@ -45,6 +94,10 @@ export default function Judge0Editor({
   const [publicResults, setPublicResults] = useState([]); // visible only
   const [summary, setSummary] = useState(null);
 
+  // Monaco/editor refs for diagnostics
+  const editorRef = useRef(null);
+  const monacoRef = useRef(null);
+
   const monacoLanguage = useMemo(() => {
     if (!languageId) return "plaintext";
     return JUDGE0_TO_MONACO[languageId] || "plaintext";
@@ -70,6 +123,11 @@ export default function Judge0Editor({
     setResults([]);
     setPublicResults([]);
     setSummary(null);
+
+    // Clear any stale diagnostics when switching questions
+    if (editorRef.current && monacoRef.current) {
+      monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
+    }
   }, [selectedQuestion?._id]);
 
   // Fetch scaffold on question/language change
@@ -83,6 +141,11 @@ export default function Judge0Editor({
         setCode(data?.body || "");
       } catch {
         setCode("");
+      }
+
+      // Clear markers when language changes (different compiler)
+      if (editorRef.current && monacoRef.current) {
+        monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
       }
     };
     fetchScaffold();
@@ -111,6 +174,22 @@ export default function Judge0Editor({
     localStorage.setItem(attemptsKey(qId), String(next));
   };
 
+  // Apply diagnostics to Monaco
+  const applyDiagnostics = (messages = []) => {
+    if (!editorRef.current || !monacoRef.current) return;
+    const model = editorRef.current.getModel();
+    // Flatten markers from all messages
+    const markers = messages.flatMap((msg) =>
+      parseErrorToMarkers(msg, monacoLanguage)
+    );
+    monacoRef.current.editor.setModelMarkers(model, "judge", markers.slice(0, 200)); // safety cap
+  };
+
+  const clearDiagnostics = () => {
+    if (!editorRef.current || !monacoRef.current) return;
+    monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
+  };
+
   const runCode = async () => {
     if (!selectedQuestion?._id) return;
     if (!languageId) return;
@@ -118,6 +197,7 @@ export default function Judge0Editor({
 
     setIsRunning(true);
     onRunStart && onRunStart();
+    clearDiagnostics();
 
     try {
       const res = await axios.post(
@@ -129,6 +209,16 @@ export default function Judge0Editor({
       setPublicResults(res.data?.publicResults || []);
       setSummary(res.data?.summary || null);
 
+      // collect compile/runtime errors from results to mark in editor
+      const errorMessages = [];
+      for (const r of res.data?.results || []) {
+        // r.actual may contain "Compilation Error: ..." or "Runtime Error: ..."
+        if (r.status !== "Passed" && typeof r.actual === "string" && r.actual.length) {
+          errorMessages.push(r.actual);
+        }
+      }
+      if (errorMessages.length) applyDiagnostics(errorMessages);
+
       // auto open footer and switch to Results tab
       setFooterOpen(true);
       setActiveTab("results");
@@ -139,6 +229,9 @@ export default function Judge0Editor({
       setResults([]);
       setPublicResults([]);
       setSummary({ message: `Error: ${err.response?.data?.error || err.message}` });
+
+      // also show a generic marker
+      applyDiagnostics([err.response?.data?.error || err.message]);
     } finally {
       const next = Math.min(maxAttempts, attemptsUsed + 1);
       setAttemptsUsed(next);
@@ -151,20 +244,33 @@ export default function Judge0Editor({
     if (!selectedQuestion?._id || !languageId) return;
     setCustomLoading(true);
     setCustomResult(null);
+    // for custom runs, we also clear diagnostics and then set based on stderr/compile_output
+    clearDiagnostics();
     try {
       const { data } = await axios.post(
         `${apiBaseUrl}/run/${selectedQuestion._id}/custom`,
         { finalCode: code, languageId, stdin: customInput }
       );
       setCustomResult(data);
+
+      // If there is stderr or a compilation/runtime note, surface it as diagnostics
+      const diag = [];
+      if (data?.stderr) diag.push(String(data.stderr));
+      // Some platforms embed compile errors into status with details—parsing anyway won't hurt
+      if (data?.status && /error/i.test(data.status) && !data.stderr) {
+        diag.push(String(data.status));
+      }
+      if (diag.length) applyDiagnostics(diag);
     } catch (err) {
+      const message = err.response?.data?.error || err.message;
       setCustomResult({
         status: "Error",
         stdout: "",
-        stderr: err.response?.data?.error || err.message,
+        stderr: message,
         time: null,
         memory: null,
       });
+      applyDiagnostics([message]);
     } finally {
       setCustomLoading(false);
     }
@@ -239,6 +345,10 @@ export default function Judge0Editor({
           theme={theme}
           value={code}
           onChange={(val) => setCode(val ?? "")}
+          onMount={(editor, monaco) => {
+            editorRef.current = editor;
+            monacoRef.current = monaco;
+          }}
           options={{
             fontSize: 14,
             minimap: { enabled: false },
