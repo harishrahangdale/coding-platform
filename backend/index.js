@@ -4,8 +4,8 @@ const cors = require("cors");
 const axios = require("axios");
 require("dotenv").config();
 
-const Question = require("./models/Question"); // new dynamic schema
-const Scaffold = require("./models/Scaffold"); // languageId + languageName
+const Question = require("./models/Question");
+const Scaffold = require("./models/Scaffold");
 
 const app = express();
 app.use(cors({
@@ -19,24 +19,17 @@ mongoose
   .then(() => console.log("MongoDB connected"))
   .catch((err) => console.error("MongoDB connection error:", err));
 
-/**
- * Utility: shape list item for /api/questions
- * We don't send test cases to the client in list view.
- */
+/** Utility: shape list item for /api/questions */
 const mapQuestionListItem = (q, languages = []) => ({
   _id: q._id,
   title: q.title,
   difficulty: q.difficulty,
   tags: q.tags || [],
-  // total score is sum of test case scores (computed server-side)
   totalScore: Array.isArray(q.testCases) ? q.testCases.reduce((s, t) => s + (t.score || 0), 0) : 0,
   languages, // [{languageId, languageName}]
 });
 
-/**
- * Utility: Judge0 headers (RapidAPI)
- * If you're using self-hosted Judge0, adjust base URL & headers accordingly.
- */
+/** Judge0 client (RapidAPI). Adjust if self-hosting Judge0. */
 const judge0 = axios.create({
   baseURL: "https://judge0-ce.p.rapidapi.com",
   headers: {
@@ -46,31 +39,21 @@ const judge0 = axios.create({
   },
 });
 
-/**
- * GET /api/questions
- * Returns a list of questions with aggregate info + allowed languages per question.
- * (No test case content is exposed here.)
- */
+/** GET /api/questions */
 app.get("/api/questions", async (req, res) => {
   try {
-    // Fetch questions
     const questions = await Question.find({}).sort({ createdAt: -1 }).lean();
 
-    // Fetch languages (scaffolds) grouped by questionId
     const scaffolds = await Scaffold.aggregate([
-      { $group: {
+      {
+        $group: {
           _id: "$questionId",
           languages: { $addToSet: { languageId: "$languageId", languageName: "$languageName" } },
-        }
-      }
+        },
+      },
     ]);
-
-    const langsByQ = new Map(scaffolds.map(s => [String(s._id), s.languages]));
-
-    const payload = questions.map((q) =>
-      mapQuestionListItem(q, langsByQ.get(String(q._id)) || [])
-    );
-
+    const langsByQ = new Map(scaffolds.map((s) => [String(s._id), s.languages]));
+    const payload = questions.map((q) => mapQuestionListItem(q, langsByQ.get(String(q._id)) || []));
     res.json(payload);
   } catch (err) {
     console.error("GET /api/questions error:", err);
@@ -78,15 +61,7 @@ app.get("/api/questions", async (req, res) => {
   }
 });
 
-/**
- * GET /api/questions/:id
- * Returns full problem statement for candidate:
- * - title, description, difficulty, tags
- * - sampleInput, sampleOutput
- * - execution settings (timeLimit, memoryLimit, maxCodeSize)
- * - languages available (from scaffolds)
- * No hidden test cases are exposed.
- */
+/** GET /api/questions/:id */
 app.get("/api/questions/:id", async (req, res) => {
   try {
     const { id } = req.params;
@@ -98,7 +73,6 @@ app.get("/api/questions/:id", async (req, res) => {
       Question.findById(id).lean(),
       Scaffold.find({ questionId: id }).select("languageId languageName").lean(),
     ]);
-
     if (!question) return res.status(404).json({ error: "Question not found" });
 
     const totalScore = Array.isArray(question.testCases)
@@ -117,6 +91,7 @@ app.get("/api/questions/:id", async (req, res) => {
       memoryLimit: question.memoryLimit,
       maxCodeSize: question.maxCodeSize,
       maxAttempts: question.maxAttempts,
+      timeAllowed: question.timeAllowed, // <-- include for timer UI
       totalScore,
       languages: (languages || []).map((l) => ({
         languageId: l.languageId,
@@ -129,11 +104,7 @@ app.get("/api/questions/:id", async (req, res) => {
   }
 });
 
-/**
- * GET /api/questions/:id/scaffold/:languageId
- * Returns the starter code body for the given (question, language).
- * Useful to prefill the editor for the candidate.
- */
+/** GET /api/questions/:id/scaffold/:languageId */
 app.get("/api/questions/:id/scaffold/:languageId", async (req, res) => {
   try {
     const { id, languageId } = req.params;
@@ -161,12 +132,39 @@ app.get("/api/questions/:id/scaffold/:languageId", async (req, res) => {
   }
 });
 
-/**
- * POST /api/run/:id
- * Run candidate code against all server-side test cases using Judge0.
- * Body: { finalCode: string, languageId: number }
- *
- * Returns per-test-case results + earned score.
+/** NEW: GET /api/questions/:id/visible-tests
+ * Returns only visible test cases (for the “Visible Test Cases” tab).
+ */
+app.get("/api/questions/:id/visible-tests", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid question ID format" });
+    }
+    const q = await Question.findById(id).lean();
+    if (!q) return res.status(404).json({ error: "Question not found" });
+
+    const visible = (q.testCases || [])
+      .map((t, i) => ({
+        index: i + 1,
+        input: t.input,
+        expected: t.output,
+        score: t.score || 0,
+        visible: !!t.visible,
+      }))
+      .filter((t) => t.visible);
+
+    res.json({ count: visible.length, cases: visible });
+  } catch (err) {
+    console.error("GET /api/questions/:id/visible-tests error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+/** POST /api/run/:id
+ * Executes code against ALL test cases (hidden+visible).
+ * Response exposes ONLY visible ones under `publicResults`.
+ * Now includes Judge0 time & memory per test for your “Results” tab.
  */
 app.post("/api/run/:id", async (req, res) => {
   const { id } = req.params;
@@ -206,6 +204,10 @@ app.post("/api/run/:id", async (req, res) => {
         }
       );
 
+      // Judge0 stats
+      const execTime = submission?.time != null ? String(submission.time) : null; // seconds (string)
+      const execMemory = submission?.memory != null ? Number(submission.memory) : null; // KB (number)
+
       let actual = "";
       let status = "Failed";
       let statusNote = submission?.status?.description || "";
@@ -214,16 +216,17 @@ app.post("/api/run/:id", async (req, res) => {
         actual = (submission.stdout || "").trim();
         status = actual === expected ? "Passed" : "Failed";
       } else {
-        if (submission.status.id === 6) {
+        if (submission?.status?.id === 6) {
           actual = `Compilation Error: ${(submission.compile_output || "").trim()}`;
-        } else if ([7, 8, 9, 10, 11, 12, 14].includes(submission.status.id)) {
+        } else if ([7, 8, 9, 10, 11, 12, 14].includes(submission?.status?.id)) {
           actual = `Runtime Error: ${(submission.stderr || submission.message || "").trim()}`;
         } else {
           actual = (submission.stderr || submission.message || "").trim();
         }
       }
 
-      if (status === "Passed") earnedScore += (tc.score || 0);
+      const tcScore = status === "Passed" ? (tc.score || 0) : 0;
+      earnedScore += tcScore;
 
       results.push({
         index: idx + 1,
@@ -232,19 +235,22 @@ app.post("/api/run/:id", async (req, res) => {
         actual,
         judge0Status: statusNote,
         status,
-        score: status === "Passed" ? (tc.score || 0) : 0,
+        time: execTime,          // e.g., "0.012"
+        memory: execMemory,      // e.g., 1234 (KB)
+        score: tcScore,
         maxScore: tc.score || 0,
         visible: !!tc.visible,
       });
     }
 
-    // Only expose visible test cases to the UI
-    const publicResults = results.filter(r => r.visible);
+    const publicResults = results.filter((r) => r.visible);
 
     res.json({
-      publicResults, // <= UI should render from this
+      publicResults, // Use for "Visible Test Cases" tab output after run, if desired
+      // Full results for the “Results” tab table (front-end decides to show or not)
+      results, 
       summary: {
-        passed: results.filter(r => r.status === "Passed").length,
+        passed: results.filter((r) => r.status === "Passed").length,
         total: results.length,
         earnedScore,
         maxScore,
@@ -253,6 +259,60 @@ app.post("/api/run/:id", async (req, res) => {
     });
   } catch (err) {
     console.error("POST /api/run/:id error:", err.response?.data || err.message);
+    res.status(500).json({ error: "Execution failed" });
+  }
+});
+
+/** NEW: POST /api/run/:id/custom
+ * Run code with a single custom stdin (NO scoring, NO checking expected output).
+ * Body: { finalCode: string, languageId: number, stdin: string }
+ * Returns: stdout, stderr/compile_output (if any), status, time, memory
+ */
+app.post("/api/run/:id/custom", async (req, res) => {
+  const { id } = req.params;
+  const finalCode = req.body.finalCode || req.body.source_code;
+  const languageId = Number(req.body.languageId ?? req.body.language_id);
+  const stdin = String(req.body.stdin ?? "");
+
+  if (!finalCode || !languageId) {
+    return res.status(400).json({ error: "finalCode and languageId are required" });
+  }
+  if (!mongoose.Types.ObjectId.isValid(id)) {
+    return res.status(400).json({ error: "Invalid question ID format" });
+  }
+
+  try {
+    const q = await Question.findById(id).lean();
+    if (!q) return res.status(404).json({ error: "Question not found" });
+
+    const { data: submission } = await judge0.post(
+      "/submissions?base64_encoded=false&wait=true",
+      { source_code: finalCode, language_id: languageId, stdin }
+    );
+
+    const execTime = submission?.time != null ? String(submission.time) : null; // seconds
+    const execMemory = submission?.memory != null ? Number(submission.memory) : null; // KB
+    const statusNote = submission?.status?.description || "";
+
+    let stdout = (submission.stdout || "").trim();
+    let stderr = "";
+    if (submission?.status?.id === 6) {
+      stderr = `Compilation Error: ${(submission.compile_output || "").trim()}`;
+    } else if ([7, 8, 9, 10, 11, 12, 14].includes(submission?.status?.id)) {
+      stderr = `Runtime Error: ${(submission.stderr || submission.message || "").trim()}`;
+    } else if (submission.stderr) {
+      stderr = submission.stderr.trim();
+    }
+
+    res.json({
+      status: statusNote,
+      time: execTime,
+      memory: execMemory,
+      stdout,
+      stderr,
+    });
+  } catch (err) {
+    console.error("POST /api/run/:id/custom error:", err.response?.data || err.message);
     res.status(500).json({ error: "Execution failed" });
   }
 });

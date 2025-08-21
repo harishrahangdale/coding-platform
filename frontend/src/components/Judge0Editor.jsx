@@ -21,7 +21,6 @@ export default function Judge0Editor({
   const [languageId, setLanguageId] = useState(null);
   const [theme, setTheme] = useState("vs");
   const [code, setCode] = useState("");
-  const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
 
   // attempts UI state
@@ -30,12 +29,28 @@ export default function Judge0Editor({
   const remaining = Math.max(0, maxAttempts - attemptsUsed);
   const attemptsExhausted = remaining <= 0;
 
+  // footer panel (output) ui
+  const [footerOpen, setFooterOpen] = useState(false);
+  const [activeTab, setActiveTab] = useState("visible"); // 'visible' | 'custom' | 'results'
+
+  // data for footer tabs
+  const [visibleTests, setVisibleTests] = useState([]); // {index,input,expected,score}
+  const [vtLoading, setVtLoading] = useState(false);
+
+  const [customInput, setCustomInput] = useState("");
+  const [customResult, setCustomResult] = useState(null); // {stdout, stderr, time, memory, status}
+  const [customLoading, setCustomLoading] = useState(false);
+
+  const [results, setResults] = useState([]); // from /run (all cases)
+  const [publicResults, setPublicResults] = useState([]); // visible only
+  const [summary, setSummary] = useState(null);
+
   const monacoLanguage = useMemo(() => {
     if (!languageId) return "plaintext";
     return JUDGE0_TO_MONACO[languageId] || "plaintext";
   }, [languageId]);
 
-  // Reset language & load attempts when question changes
+  // Reset language, attempts, output data when question changes
   useEffect(() => {
     if (!selectedQuestion?._id) return;
 
@@ -43,13 +58,18 @@ export default function Judge0Editor({
     const defaultLangId = langs.length ? langs[0].languageId : 62;
     setLanguageId(defaultLangId);
 
-    // load attempts from localStorage
     const used = Number(localStorage.getItem(attemptsKey(selectedQuestion._id)) || 0);
     setAttemptsUsed(isNaN(used) ? 0 : used);
 
-    // clear editor code until scaffold loads
     setCode("");
-    setOutput("");
+    setFooterOpen(false);
+    setActiveTab("visible");
+    setVisibleTests([]);
+    setCustomInput("");
+    setCustomResult(null);
+    setResults([]);
+    setPublicResults([]);
+    setSummary(null);
   }, [selectedQuestion?._id]);
 
   // Fetch scaffold on question/language change
@@ -68,26 +88,35 @@ export default function Judge0Editor({
     fetchScaffold();
   }, [selectedQuestion?._id, languageId, apiBaseUrl]);
 
+  // Lazy-load visible tests when opening footer or switching to the tab
+  useEffect(() => {
+    const loadVisible = async () => {
+      if (!footerOpen || activeTab !== "visible" || !selectedQuestion?._id) return;
+      setVtLoading(true);
+      try {
+        const { data } = await axios.get(
+          `${apiBaseUrl}/questions/${selectedQuestion._id}/visible-tests`
+        );
+        setVisibleTests(data?.cases || []);
+      } catch {
+        setVisibleTests([]);
+      } finally {
+        setVtLoading(false);
+      }
+    };
+    loadVisible();
+  }, [footerOpen, activeTab, selectedQuestion?._id, apiBaseUrl]);
+
   const persistAttempts = (qId, next) => {
     localStorage.setItem(attemptsKey(qId), String(next));
   };
 
   const runCode = async () => {
-    if (!selectedQuestion?._id) {
-      setOutput("Please select a question first.");
-      return;
-    }
-    if (!languageId) {
-      setOutput("Please select a language.");
-      return;
-    }
-    if (attemptsExhausted) {
-      setOutput(`You've used all ${maxAttempts} attempts for this question.`);
-      return;
-    }
+    if (!selectedQuestion?._id) return;
+    if (!languageId) return;
+    if (attemptsExhausted) return;
 
     setIsRunning(true);
-    setOutput("Running...");
     onRunStart && onRunStart();
 
     try {
@@ -96,35 +125,48 @@ export default function Judge0Editor({
         { finalCode: code, languageId }
       );
 
-      // Use only publicResults (hidden tests are filtered out by backend)
-      const publicResults = res.data.publicResults || res.data.results || [];
-      const summary = res.data.summary || {};
+      setResults(res.data?.results || []);
+      setPublicResults(res.data?.publicResults || []);
+      setSummary(res.data?.summary || null);
 
-      const text =
-        (publicResults.length
-          ? publicResults
-              .map(
-                (r, i) =>
-                  `Test Case ${r.index ?? i + 1}: ${r.status}\n` +
-                  `Input: ${r.input}\nExpected: ${r.expected}\nGot: ${r.actual || "No output"}\n` +
-                  `Score: ${r.score}/${r.maxScore}\n`
-              )
-              .join("\n")
-          : "No public test cases to display.") +
-        `\nSummary: ${summary.message || ""}`;
+      // auto open footer and switch to Results tab
+      setFooterOpen(true);
+      setActiveTab("results");
 
-      setOutput(text);
       onRunFinish && onRunFinish(res.data);
     } catch (err) {
-      setOutput(`Error: ${err.response?.data?.error || err.message}`);
-      onRunFinish && onRunFinish(null, err);
+      // show an inline error in results panel
+      setResults([]);
+      setPublicResults([]);
+      setSummary({ message: `Error: ${err.response?.data?.error || err.message}` });
     } finally {
-      // Count this as an attempt (success or error), then disable if needed
       const next = Math.min(maxAttempts, attemptsUsed + 1);
       setAttemptsUsed(next);
       persistAttempts(selectedQuestion._id, next);
-
       setIsRunning(false);
+    }
+  };
+
+  const runCustom = async () => {
+    if (!selectedQuestion?._id || !languageId) return;
+    setCustomLoading(true);
+    setCustomResult(null);
+    try {
+      const { data } = await axios.post(
+        `${apiBaseUrl}/run/${selectedQuestion._id}/custom`,
+        { finalCode: code, languageId, stdin: customInput }
+      );
+      setCustomResult(data);
+    } catch (err) {
+      setCustomResult({
+        status: "Error",
+        stdout: "",
+        stderr: err.response?.data?.error || err.message,
+        time: null,
+        memory: null,
+      });
+    } finally {
+      setCustomLoading(false);
     }
   };
 
@@ -133,11 +175,11 @@ export default function Judge0Editor({
   const languages = selectedQuestion?.languages || [];
 
   return (
-    <div className="h-full w-full flex flex-col gap-3">
+    <div className="h-full w-full flex flex-col">
       {/* Attempts info */}
       {selectedQuestion?._id && (
         <div
-          className={`text-sm p-2 rounded border ${
+          className={`text-sm p-2 rounded border mb-2 ${
             attemptsExhausted
               ? "bg-red-50 border-red-200 text-red-700"
               : "bg-yellow-50 border-yellow-200 text-yellow-800"
@@ -149,7 +191,7 @@ export default function Judge0Editor({
       )}
 
       {/* Controls */}
-      <div className="flex flex-wrap items-center gap-3">
+      <div className="flex items-center gap-3 mb-2">
         {/* Language dropdown */}
         <div className="flex items-center gap-2">
           <label className="text-sm font-medium">Language:</label>
@@ -189,8 +231,8 @@ export default function Judge0Editor({
         </button>
       </div>
 
-      {/* Editor */}
-      <div className="flex-1 min-h-[300px] border rounded overflow-hidden">
+      {/* Editor fills available space; footer overlays at bottom */}
+      <div className="relative flex-1 border rounded overflow-hidden">
         <Editor
           height="100%"
           language={monacoLanguage}
@@ -205,18 +247,169 @@ export default function Judge0Editor({
             readOnly: attemptsExhausted,
           }}
         />
-      </div>
 
-      {/* Output */}
-      <div className="flex flex-col w-full">
-        <label className="font-semibold mb-1">Output:</label>
-        <pre
-          className={`border rounded p-3 font-mono overflow-auto whitespace-pre-wrap min-h-[184px] transition-colors duration-200 ${
-            isDark ? "bg-gray-900 text-white" : "bg-gray-100 text-black"
-          }`}
+        {/* Footer handle */}
+        <button
+          onClick={() => setFooterOpen((v) => !v)}
+          className="absolute left-1/2 -translate-x-1/2 -top-0 translate-y-[-50%] z-10
+                     bg-white border rounded-full w-8 h-8 flex items-center justify-center shadow"
+          title={footerOpen ? "Collapse output" : "Expand output"}
         >
-          {output}
-        </pre>
+          {footerOpen ? "▾" : "▴"}
+        </button>
+
+        {/* Footer drawer */}
+        <div
+          className={`absolute left-0 right-0 bottom-0 bg-white border-t transition-all duration-300
+                      ${footerOpen ? "h-[45%]" : "h-0"} overflow-hidden`}
+        >
+          {/* Tabs */}
+          <div className="flex items-center gap-2 px-3 py-2 border-b bg-gray-50">
+            {[
+              { key: "visible", label: "Visible Test Cases" },
+              { key: "custom", label: "Custom Input" },
+              { key: "results", label: "Results" },
+            ].map((t) => (
+              <button
+                key={t.key}
+                onClick={() => setActiveTab(t.key)}
+                className={`px-3 py-1 rounded text-sm border ${
+                  activeTab === t.key
+                    ? "bg-white shadow-sm"
+                    : "bg-gray-100 hover:bg-gray-200"
+                }`}
+              >
+                {t.label}
+              </button>
+            ))}
+          </div>
+
+          {/* Tab contents */}
+          <div className="p-3 h-[calc(100%-40px)] overflow-auto text-sm">
+            {/* Visible Tests */}
+            {activeTab === "visible" && (
+              <div>
+                {vtLoading ? (
+                  <div className="text-gray-500">Loading visible test cases…</div>
+                ) : visibleTests.length ? (
+                  <table className="w-full text-left border">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="p-2 border">#</th>
+                        <th className="p-2 border">Input</th>
+                        <th className="p-2 border">Expected</th>
+                        <th className="p-2 border">Score</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleTests.map((t) => (
+                        <tr key={t.index} className="align-top">
+                          <td className="p-2 border">{t.index}</td>
+                          <td className="p-2 border whitespace-pre-wrap">{t.input}</td>
+                          <td className="p-2 border whitespace-pre-wrap">{t.expected}</td>
+                          <td className="p-2 border">{t.score}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-gray-500">No public test cases to display.</div>
+                )}
+              </div>
+            )}
+
+            {/* Custom Input */}
+            {activeTab === "custom" && (
+              <div className="flex flex-col gap-2 h-full">
+                <textarea
+                  className="border rounded p-2 font-mono min-h-[120px] flex-1"
+                  placeholder="Enter custom input (stdin)…"
+                  value={customInput}
+                  onChange={(e) => setCustomInput(e.target.value)}
+                />
+                <div className="flex items-center gap-2">
+                  <button
+                    onClick={runCustom}
+                    disabled={customLoading}
+                    className={`px-3 py-2 rounded text-white ${
+                      customLoading ? "bg-gray-400" : "bg-green-600 hover:bg-green-700"
+                    }`}
+                  >
+                    {customLoading ? "Running…" : "Test Input"}
+                  </button>
+                </div>
+
+                {customResult && (
+                  <div className="grid grid-cols-2 gap-3">
+                    <div>
+                      <div className="font-semibold mb-1">Stdout</div>
+                      <pre className="border rounded p-2 bg-gray-50 whitespace-pre-wrap">
+                        {customResult.stdout || "—"}
+                      </pre>
+                    </div>
+                    <div>
+                      <div className="font-semibold mb-1">Stderr</div>
+                      <pre className="border rounded p-2 bg-gray-50 whitespace-pre-wrap text-red-700">
+                        {customResult.stderr || "—"}
+                      </pre>
+                    </div>
+                    <div>
+                      <div className="font-semibold mb-1">Status</div>
+                      <div>{customResult.status || "—"}</div>
+                    </div>
+                    <div>
+                      <div className="font-semibold mb-1">Time / Memory</div>
+                      <div>
+                        {customResult.time ?? "—"} s &nbsp;/&nbsp; {customResult.memory ?? "—"} KB
+                      </div>
+                    </div>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Results Table */}
+            {activeTab === "results" && (
+              <div className="flex flex-col gap-2">
+                {summary?.message && (
+                  <div className="p-2 rounded border bg-indigo-50 text-indigo-800">
+                    {summary.message}
+                  </div>
+                )}
+                {results?.length ? (
+                  <table className="w-full text-left border">
+                    <thead className="bg-gray-100">
+                      <tr>
+                        <th className="p-2 border">#</th>
+                        <th className="p-2 border">Status</th>
+                        <th className="p-2 border">Time (s)</th>
+                        <th className="p-2 border">Memory (KB)</th>
+                        <th className="p-2 border">Score</th>
+                        <th className="p-2 border">Max</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {results.map((r) => (
+                        <tr key={r.index}>
+                          <td className="p-2 border">{r.index}</td>
+                          <td className={`p-2 border ${r.status === "Passed" ? "text-green-700" : "text-red-700"}`}>
+                            {r.status}
+                          </td>
+                          <td className="p-2 border">{r.time ?? "—"}</td>
+                          <td className="p-2 border">{r.memory ?? "—"}</td>
+                          <td className="p-2 border">{r.score}</td>
+                          <td className="p-2 border">{r.maxScore}</td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                ) : (
+                  <div className="text-gray-500">Run your code to see results.</div>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
       </div>
     </div>
   );
