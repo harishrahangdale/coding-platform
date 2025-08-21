@@ -1,47 +1,68 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import Editor from "@monaco-editor/react";
 import axios from "axios";
 
-const JUDGE0_LANGUAGES = [
-  { id: 62, name: "Java (OpenJDK 13)", monaco: "java" }, // Default
-];
+// Map Judge0 languageId -> Monaco language id
+// Extend as you add more languages in your seed.
+const JUDGE0_TO_MONACO = {
+  50: "c",            // C (GCC)
+  54: "cpp",          // C++ (GCC)
+  62: "java",         // Java 17
+  63: "javascript",   // Node.js
+  71: "python",       // Python 3
+  75: "csharp",       // .NET (if you add)
+};
 
 export default function Judge0Editor({
-  selectedQuestion,
+  apiBaseUrl,            // e.g., "https://coding-platform-teq9.onrender.com/api"
+  selectedQuestion,      // question doc from /api/questions/:id
   onRunStart,
   onRunFinish,
 }) {
-  const [languageId, setLanguageId] = useState(62); // default Java
-  const [theme, setTheme] = useState("vs"); // "vs" (light) | "vs-dark"
+  const [languageId, setLanguageId] = useState(null);
+  const [theme, setTheme] = useState("vs"); // "vs" | "vs-dark"
   const [code, setCode] = useState("");
   const [output, setOutput] = useState("");
   const [isRunning, setIsRunning] = useState(false);
 
-  // When a question is selected, inject scaffold
+  const monacoLanguage = useMemo(() => {
+    if (!languageId) return "plaintext";
+    return JUDGE0_TO_MONACO[languageId] || "plaintext";
+  }, [languageId]);
+
+  // When a new question is selected, default to its first available language
   useEffect(() => {
-    if (selectedQuestion) {
-      const scaffold = `import java.util.*;
+    if (!selectedQuestion) return;
 
-public class Main {
-    public static void main(String[] args) {
-        Scanner sc = new Scanner(System.in);
-        String s = sc.nextLine();
-        System.out.println(solve(s));
-    }
+    const langs = selectedQuestion.languages || [];
+    const defaultLangId = langs.length ? langs[0].languageId : 62; // fallback Java 17
+    setLanguageId(defaultLangId);
+  }, [selectedQuestion?._id]); // reset when question changes
 
-    // Implement your logic here
-    public static int solve(String s) {
-        // Write your code below
-        return 0;
-    }
-}`;
-      setCode(scaffold);
-    }
-  }, [selectedQuestion]);
+  // Fetch scaffold whenever question or language changes
+  useEffect(() => {
+    const fetchScaffold = async () => {
+      if (!selectedQuestion?._id || !languageId) return;
+      try {
+        const { data } = await axios.get(
+          `${apiBaseUrl}/questions/${selectedQuestion._id}/scaffold/${languageId}`
+        );
+        setCode(data?.body || "");
+      } catch (err) {
+        // If no scaffold exists, start with empty template
+        setCode("");
+      }
+    };
+    fetchScaffold();
+  }, [selectedQuestion?._id, languageId, apiBaseUrl]);
 
   const runCode = async () => {
     if (!selectedQuestion?._id) {
       setOutput("Please select a question first.");
+      return;
+    }
+    if (!languageId) {
+      setOutput("Please select a language.");
       return;
     }
 
@@ -50,20 +71,25 @@ public class Main {
     onRunStart && onRunStart();
 
     try {
-      const res = await axios.post(`https://coding-platform-teq9.onrender.com/api/run/${selectedQuestion._id}`, {
-        finalCode: code,          // ✅ send full code
-        language_id: languageId,
-      });
+      const res = await axios.post(
+        `${apiBaseUrl}/run/${selectedQuestion._id}`,
+        {
+          finalCode: code,
+          languageId, // backend accepts camelCase or snake_case
+        }
+      );
 
-      let text = res.data.results
-        .map(
-          (r, i) =>
-            `Test Case ${i + 1}: ${r.status}\nInput: ${r.input}\nExpected: ${r.expected}\nGot: ${r.actual || "No output"}\n`
-        )
-        .join("\n");
-      text += `\nSummary: ${res.data.summary}`;
+      const { results = [], summary = {} } = res.data || {};
+      const text =
+        results
+          .map(
+            (r, i) =>
+              `Test Case ${i + 1}: ${r.status}\nInput: ${r.input}\nExpected: ${r.expected}\nGot: ${r.actual || "No output"}\nScore: ${r.score}/${r.maxScore}\n`
+          )
+          .join("\n") +
+        `\nSummary: ${summary.message || `${summary.earnedScore}/${summary.maxScore} points`}`;
+
       setOutput(text);
-
       onRunFinish && onRunFinish(res.data);
     } catch (err) {
       setOutput(`Error: ${err.response?.data?.error || err.message}`);
@@ -73,16 +99,31 @@ public class Main {
     }
   };
 
-  const toggleTheme = () => {
-    setTheme((prev) => (prev === "vs" ? "vs-dark" : "vs"));
-  };
-
+  const toggleTheme = () => setTheme((prev) => (prev === "vs" ? "vs-dark" : "vs"));
   const isDark = theme === "vs-dark";
+
+  const languages = selectedQuestion?.languages || []; // [{languageId, languageName}]
 
   return (
     <div className="h-full w-full flex flex-col gap-3">
       {/* Controls */}
-      <div className="flex items-center gap-3">
+      <div className="flex flex-wrap items-center gap-3">
+        {/* Language dropdown */}
+        <div className="flex items-center gap-2">
+          <label className="text-sm font-medium">Language:</label>
+          <select
+            className="border rounded px-2 py-1"
+            value={languageId ?? ""}
+            onChange={(e) => setLanguageId(Number(e.target.value))}
+          >
+            {languages.map((l) => (
+              <option key={l.languageId} value={l.languageId}>
+                {l.languageName}
+              </option>
+            ))}
+          </select>
+        </div>
+
         <button
           onClick={runCode}
           disabled={isRunning}
@@ -106,7 +147,7 @@ public class Main {
       <div className="flex-1 min-h-[300px] border rounded overflow-hidden">
         <Editor
           height="100%"
-          language="java"
+          language={monacoLanguage}
           theme={theme}
           value={code}
           onChange={(val) => setCode(val ?? "")}
