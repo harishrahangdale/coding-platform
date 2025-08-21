@@ -12,6 +12,7 @@ require("dotenv").config();
 // Import your models (ensure these paths are correct)
 const Question = require("../models/Question");  // dynamic testCases schema
 const Scaffold = require("../models/Scaffold");  // languageId + languageName, unique (questionId, languageId)
+const { time } = require("console");
 
 // ---------------- SEED DATA (edit/add freely) ----------------
 const seed = [
@@ -26,6 +27,7 @@ const seed = [
       timeLimit: 2,
       memoryLimit: 128,
       maxCodeSize: 64,
+      timeAllowed: 5, // minutes
       maxAttempts: 3,
       testCases: [
         { input: "2 3", output: "5", score: 2 },
@@ -72,6 +74,7 @@ print(a + b)`
       timeLimit: 2,
       memoryLimit: 128,
       maxCodeSize: 64,
+      timeAllowed: 5, // minutes
       maxAttempts: 3,
       testCases: [
         { input: "hello", output: "olleh", score: 2 },
@@ -117,6 +120,7 @@ console.log(s.split('').reverse().join(''));`
       timeLimit: 2,
       memoryLimit: 128,
       maxCodeSize: 128,
+      timeAllowed: 5, // minutes
       maxAttempts: 3,
       testCases: [
         { input: "0", output: "0", score: 2 },

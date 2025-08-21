@@ -33,7 +33,7 @@ const cleanupFiles = (files = []) => {
 // POST /api/questions  (multipart/form-data)
 // Fields:
 // - Body fields: title, description, difficulty, tags (comma or JSON array),
-//   timeLimit, memoryLimit, maxCodeSize, maxAttempts, testCases (JSON), scaffolds (JSON)
+//   timeLimit, memoryLimit, maxCodeSize, timeAllowed, maxAttempts, testCases (JSON), scaffolds (JSON)
 // - Files: sampleInput (txt), sampleOutput (txt)
 router.post(
   "/questions",
@@ -55,6 +55,7 @@ router.post(
         timeLimit,  // seconds
         memoryLimit, // MB
         maxCodeSize, // KB
+        timeAllowed, // minutes
         maxAttempts, // number
         testCases,   // JSON array: [{input,output,score,explanation?,visible?}]
         scaffolds    // JSON array: [{languageId:number, languageName:string, body:string}]
@@ -107,6 +108,7 @@ router.post(
         timeLimit: timeLimit != null ? Number(timeLimit) : 5,
         memoryLimit: memoryLimit != null ? Number(memoryLimit) : 256,
         maxCodeSize: maxCodeSize != null ? Number(maxCodeSize) : 1024,
+        timeAllowed: timeAllowed != null ? Number(timeAllowed) : 15,
         maxAttempts: maxAttempts != null ? Number(maxAttempts) : 3,
       }], { session });
 

@@ -30,6 +30,7 @@ const questionSchema = new mongoose.Schema(
     timeLimit: { type: Number, default: 5 },     // seconds
     memoryLimit: { type: Number, default: 256 },  // MB
     maxCodeSize: { type: Number, default: 1024 }, // KB
+    timeAllowed: { type: Number, required: true, default: 15 }, // per-question duration (minutes)
 
     // Admin/candidate policy
     maxAttempts: { type: Number, default: 3 },
