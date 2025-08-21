@@ -1,7 +1,9 @@
-import React, { useState, useEffect, useMemo } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import axios from "axios";
 import "./App.css";
 import Judge0Editor from "./components/Judge0Editor";
+
+const LS_KEY = "ui:leftWidth";
 
 export default function App() {
   const [questions, setQuestions] = useState([]);
@@ -9,6 +11,55 @@ export default function App() {
   const [activeTab, setActiveTab] = useState("list"); // 'list' | 'details'
   const [search, setSearch] = useState("");
   const [difficulty, setDifficulty] = useState("All");
+
+  // ----- Resizable split state -----
+  const [leftWidth, setLeftWidth] = useState(() => {
+    const saved = Number(localStorage.getItem(LS_KEY));
+    // default ~40% of typical 1440px screen
+    return Number.isFinite(saved) && saved > 0 ? saved : 520;
+  });
+  const draggingRef = useRef(false);
+
+  // Clamp and persist when leftWidth changes
+  useEffect(() => {
+    const min = 300;                      // min left pane
+    const max = Math.max(480, window.innerWidth * 0.7); // cap at ~70vw
+    const clamped = Math.min(Math.max(leftWidth, min), max);
+    if (clamped !== leftWidth) setLeftWidth(clamped);
+    localStorage.setItem(LS_KEY, String(clamped));
+  }, [leftWidth]);
+
+  // Global mouse handlers for drag
+  useEffect(() => {
+    const onMove = (e) => {
+      if (!draggingRef.current) return;
+      // left width = mouse X, but clamp so right pane has room
+      const minLeft = 280;
+      const minRight = 420; // keep editor usable
+      const maxLeft = Math.max(minLeft, window.innerWidth - minRight);
+      const next = Math.min(Math.max(e.clientX, minLeft), maxLeft);
+      setLeftWidth(next);
+    };
+    const onUp = () => {
+      if (!draggingRef.current) return;
+      draggingRef.current = false;
+      document.body.style.userSelect = "";
+      document.body.style.cursor = "";
+    };
+    window.addEventListener("mousemove", onMove);
+    window.addEventListener("mouseup", onUp);
+    return () => {
+      window.removeEventListener("mousemove", onMove);
+      window.removeEventListener("mouseup", onUp);
+    };
+  }, []);
+
+  const startDrag = (e) => {
+    e.preventDefault();
+    draggingRef.current = true;
+    document.body.style.userSelect = "none";
+    document.body.style.cursor = "col-resize";
+  };
 
   // Backend base URL
   const API_BASE_URL = "https://coding-platform-teq9.onrender.com/api";
@@ -39,16 +90,19 @@ export default function App() {
     try {
       const { data } = await axios.get(`${API_BASE_URL}/questions/${id}`);
       setSelectedQuestion(data);
-      setActiveTab("details"); // auto switch for full-height details
+      setActiveTab("details"); // full-height details
     } catch (err) {
       console.error("Error fetching question:", err);
     }
   };
 
   return (
-    <div className="flex h-screen">
-      {/* LEFT: Tabs container */}
-      <div className="w-[40%] min-w-[360px] bg-gray-50 border-r flex flex-col">
+    <div className="h-screen w-screen overflow-hidden flex">
+      {/* LEFT PANE (resizable) */}
+      <div
+        className="h-full bg-gray-50 border-r flex flex-col"
+        style={{ width: leftWidth, minWidth: 280 }}
+      >
         {/* Tabs Header (sticky) */}
         <div className="px-3 pt-3 bg-gray-50 border-b sticky top-0 z-10">
           <h1 className="text-2xl font-bold mb-3">Coding Platform</h1>
@@ -251,8 +305,19 @@ export default function App() {
         )}
       </div>
 
-      {/* RIGHT: Editor */}
-      <div className="w-[60%] p-4 flex flex-col">
+      {/* RESIZER HANDLE */}
+      <div
+        onMouseDown={startDrag}
+        role="separator"
+        aria-orientation="vertical"
+        aria-label="Resize panels"
+        className={`h-full w-[6px] cursor-col-resize bg-transparent hover:bg-indigo-300 transition-colors
+                    ${draggingRef.current ? "bg-indigo-400" : ""}`}
+        title="Drag to resize"
+      />
+
+      {/* RIGHT PANE (editor flexes) */}
+      <div className="flex-1 min-w-[360px] p-4 flex flex-col">
         <Judge0Editor apiBaseUrl={API_BASE_URL} selectedQuestion={selectedQuestion} />
       </div>
     </div>
