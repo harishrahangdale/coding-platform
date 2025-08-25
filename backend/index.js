@@ -410,8 +410,6 @@ app.get("/api/submissions/:candidate_id/:screening_test_id", async (req, res) =>
   }
 });
 
-const EditorSession = require("./models/EditorSession");
-
 // Capture editor events (append to session)
 app.post("/api/editor-events", async (req, res) => {
   try {
