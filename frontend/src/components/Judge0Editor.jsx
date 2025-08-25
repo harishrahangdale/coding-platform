@@ -11,6 +11,8 @@ const JUDGE0_TO_MONACO = {
 };
 
 const attemptsKey = (questionId) => `attempts:${questionId}`;
+const CAND_ID_KEY = "ctx:candidate_id";
+const TEST_ID_KEY = "ctx:screening_test_id";
 
 // ---------- helpers: diagnostics ----------
 function parseErrorToMarkers(msg = "", language = "plaintext") {
@@ -61,12 +63,26 @@ function parseErrorToMarkers(msg = "", language = "plaintext") {
   return markers;
 }
 
+// Stable random IDs persisted in localStorage (demo-friendly)
+function getOrCreate(ctxKey, prefix) {
+  let v = localStorage.getItem(ctxKey);
+  if (!v) {
+    v = `${prefix}_${Math.random().toString(36).slice(2, 10)}${Date.now().toString(36)}`;
+    localStorage.setItem(ctxKey, v);
+  }
+  return v;
+}
+
 export default function Judge0Editor({
   apiBaseUrl,
   selectedQuestion,
   onRunStart,
   onRunFinish,
 }) {
+  // Demo context IDs (replace with real values when integrating SSO/session)
+  const candidateId = useRef(getOrCreate(CAND_ID_KEY, "cand")).current;
+  const screeningTestId = useRef(getOrCreate(TEST_ID_KEY, "test")).current;
+
   const [languageId, setLanguageId] = useState(null);
   const [theme, setTheme] = useState("vs");
   const [code, setCode] = useState("");
@@ -98,6 +114,12 @@ export default function Judge0Editor({
   const editorRef = useRef(null);
   const monacoRef = useRef(null);
 
+  // AUTOSAVE state
+  const [saveState, setSaveState] = useState("idle"); // idle | saving | saved | error
+  const [lastSavedAt, setLastSavedAt] = useState(null);
+  const saveTimerRef = useRef(null);
+  const lastSavedPayloadRef = useRef("");
+
   const monacoLanguage = useMemo(() => {
     if (!languageId) return "plaintext";
     return JUDGE0_TO_MONACO[languageId] || "plaintext";
@@ -123,6 +145,8 @@ export default function Judge0Editor({
     setResults([]);
     setPublicResults([]);
     setSummary(null);
+    setSaveState("idle");
+    setLastSavedAt(null);
 
     // Clear any stale diagnostics when switching questions
     if (editorRef.current && monacoRef.current) {
@@ -130,17 +154,40 @@ export default function Judge0Editor({
     }
   }, [selectedQuestion?._id]);
 
-  // Fetch scaffold on question/language change
+  // Load DRAFT first; if none, load SCAFFOLD (on question/language change)
   useEffect(() => {
-    const fetchScaffold = async () => {
+    const loadDraftOrScaffold = async () => {
       if (!selectedQuestion?._id || !languageId) return;
+
+      // Try draft first
       try {
-        const { data } = await axios.get(
-          `${apiBaseUrl}/questions/${selectedQuestion._id}/scaffold/${languageId}`
-        );
-        setCode(data?.body || "");
+        const { data } = await axios.get(`${apiBaseUrl}/draft`, {
+          params: {
+            candidate_id: candidateId,
+            screening_test_id: screeningTestId,
+            questionId: selectedQuestion._id,
+            languageId,
+          },
+        });
+        if (data?.draft?.code != null) {
+          setCode(data.draft.code);
+        } else {
+          // Fallback to scaffold
+          const { data: s } = await axios.get(
+            `${apiBaseUrl}/questions/${selectedQuestion._id}/scaffold/${languageId}`
+          );
+          setCode(s?.body || "");
+        }
       } catch {
-        setCode("");
+        // Fallback to scaffold on any error
+        try {
+          const { data: s } = await axios.get(
+            `${apiBaseUrl}/questions/${selectedQuestion._id}/scaffold/${languageId}`
+          );
+          setCode(s?.body || "");
+        } catch {
+          setCode("");
+        }
       }
 
       // Clear markers when language changes (different compiler)
@@ -148,8 +195,8 @@ export default function Judge0Editor({
         monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
       }
     };
-    fetchScaffold();
-  }, [selectedQuestion?._id, languageId, apiBaseUrl]);
+    loadDraftOrScaffold();
+  }, [selectedQuestion?._id, languageId, apiBaseUrl, candidateId, screeningTestId]);
 
   // Lazy-load visible tests when opening footer or switching to the tab
   useEffect(() => {
@@ -178,7 +225,6 @@ export default function Judge0Editor({
   const applyDiagnostics = (messages = []) => {
     if (!editorRef.current || !monacoRef.current) return;
     const model = editorRef.current.getModel();
-    // Flatten markers from all messages
     const markers = messages.flatMap((msg) =>
       parseErrorToMarkers(msg, monacoLanguage)
     );
@@ -189,6 +235,39 @@ export default function Judge0Editor({
     if (!editorRef.current || !monacoRef.current) return;
     monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
   };
+
+  // ---------------- AUTOSAVE (debounced) ----------------
+  useEffect(() => {
+    if (!selectedQuestion?._id || !languageId) return;
+
+    const payloadKey = `${selectedQuestion._id}|${languageId}|${code}`;
+    if (lastSavedPayloadRef.current === payloadKey) return; // no-op if same content
+
+    if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    setSaveState("idle");
+
+    saveTimerRef.current = setTimeout(async () => {
+      try {
+        setSaveState("saving");
+        await axios.post(`${apiBaseUrl}/save-draft`, {
+          candidate_id: candidateId,
+          screening_test_id: screeningTestId,
+          questionId: selectedQuestion._id,
+          languageId,
+          code,
+        });
+        lastSavedPayloadRef.current = payloadKey;
+        setSaveState("saved");
+        setLastSavedAt(new Date());
+      } catch {
+        setSaveState("error");
+      }
+    }, 1200); // 1.2s after typing stops
+
+    return () => {
+      if (saveTimerRef.current) clearTimeout(saveTimerRef.current);
+    };
+  }, [code, selectedQuestion?._id, languageId, apiBaseUrl, candidateId, screeningTestId]);
 
   const runCode = async () => {
     if (!selectedQuestion?._id) return;
@@ -202,7 +281,12 @@ export default function Judge0Editor({
     try {
       const res = await axios.post(
         `${apiBaseUrl}/run/${selectedQuestion._id}`,
-        { finalCode: code, languageId }
+        {
+          finalCode: code,
+          languageId,
+          candidate_id: candidateId,
+          screening_test_id: screeningTestId,
+        }
       );
 
       setResults(res.data?.results || []);
@@ -212,7 +296,6 @@ export default function Judge0Editor({
       // collect compile/runtime errors from results to mark in editor
       const errorMessages = [];
       for (const r of res.data?.results || []) {
-        // r.actual may contain "Compilation Error: ..." or "Runtime Error: ..."
         if (r.status !== "Passed" && typeof r.actual === "string" && r.actual.length) {
           errorMessages.push(r.actual);
         }
@@ -225,12 +308,9 @@ export default function Judge0Editor({
 
       onRunFinish && onRunFinish(res.data);
     } catch (err) {
-      // show an inline error in results panel
       setResults([]);
       setPublicResults([]);
       setSummary({ message: `Error: ${err.response?.data?.error || err.message}` });
-
-      // also show a generic marker
       applyDiagnostics([err.response?.data?.error || err.message]);
     } finally {
       const next = Math.min(maxAttempts, attemptsUsed + 1);
@@ -244,23 +324,29 @@ export default function Judge0Editor({
     if (!selectedQuestion?._id || !languageId) return;
     setCustomLoading(true);
     setCustomResult(null);
-    // for custom runs, we also clear diagnostics and then set based on stderr/compile_output
     clearDiagnostics();
     try {
       const { data } = await axios.post(
         `${apiBaseUrl}/run/${selectedQuestion._id}/custom`,
-        { finalCode: code, languageId, stdin: customInput }
+        {
+          finalCode: code,
+          languageId,
+          stdin: customInput,
+          candidate_id: candidateId,
+          screening_test_id: screeningTestId,
+        }
       );
       setCustomResult(data);
 
-      // If there is stderr or a compilation/runtime note, surface it as diagnostics
       const diag = [];
       if (data?.stderr) diag.push(String(data.stderr));
-      // Some platforms embed compile errors into status with details—parsing anyway won't hurt
       if (data?.status && /error/i.test(data.status) && !data.stderr) {
         diag.push(String(data.status));
       }
       if (diag.length) applyDiagnostics(diag);
+
+      setFooterOpen(true);
+      setActiveTab("custom");
     } catch (err) {
       const message = err.response?.data?.error || err.message;
       setCustomResult({
@@ -280,19 +366,37 @@ export default function Judge0Editor({
   const isDark = theme === "vs-dark";
   const languages = selectedQuestion?.languages || [];
 
+  const SavedBadge = () => {
+    if (saveState === "saving") return <span className="text-xs text-gray-500">Saving…</span>;
+    if (saveState === "saved")
+      return (
+        <span className="text-xs text-green-700">
+          Saved{lastSavedAt ? ` · ${lastSavedAt.toLocaleTimeString()}` : ""}
+        </span>
+      );
+    if (saveState === "error")
+      return <span className="text-xs text-red-600">Save failed</span>;
+    return null;
+  };
+
   return (
     <div className="h-full w-full flex flex-col">
-      {/* Attempts info */}
+      {/* Attempts info + autosave status */}
       {selectedQuestion?._id && (
-        <div
-          className={`text-sm p-2 rounded border mb-2 ${
-            attemptsExhausted
-              ? "bg-red-50 border-red-200 text-red-700"
-              : "bg-yellow-50 border-yellow-200 text-yellow-800"
-          }`}
-        >
-          Attempts used: <b>{attemptsUsed}</b> / {maxAttempts}{" "}
-          {attemptsExhausted && "• No more attempts left."}
+        <div className="flex items-center justify-between mb-2">
+          <div
+            className={`text-sm p-2 rounded border ${
+              attemptsExhausted
+                ? "bg-red-50 border-red-200 text-red-700"
+                : "bg-yellow-50 border-yellow-200 text-yellow-800"
+            }`}
+          >
+            Attempts used: <b>{attemptsUsed}</b> / {maxAttempts}{" "}
+            {attemptsExhausted && "• No more attempts left."}
+          </div>
+          <div className="px-2">
+            <SavedBadge />
+          </div>
         </div>
       )}
 
