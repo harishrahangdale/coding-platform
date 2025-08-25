@@ -19,7 +19,6 @@ function parseErrorToMarkers(msg = "", language = "plaintext") {
   const markers = [];
   const text = String(msg);
 
-  // Common defaults
   const push = (line = 1, column = 1, message = text) =>
     markers.push({
       startLineNumber: Math.max(1, Number(line) || 1),
@@ -30,40 +29,27 @@ function parseErrorToMarkers(msg = "", language = "plaintext") {
       severity: 8, // monaco.MarkerSeverity.Error
     });
 
-  // Java / C / C++ gcc/javac style: "Main.java:12: error: ..." or "main.c:7:..."
+  // Java/C/C++: "...:12: error: ..."
   let m = text.match(/:[ ]?(\d+):/);
-  if (m) {
-    push(Number(m[1]), 1, text);
-    return markers;
-  }
+  if (m) { push(Number(m[1]), 1, text); return markers; }
 
-  // Java stack traces: "at pkg.Class.method(Class.java:123)"
+  // Java stack: "(Class.java:123)"
   m = text.match(/\((.+?):(\d+)\)/);
-  if (m) {
-    push(Number(m[2]), 1, text);
-    return markers;
-  }
+  if (m) { push(Number(m[2]), 1, text); return markers; }
 
-  // Python: 'File "stdin", line 5' or 'File "Main.py", line 5'
+  // Python: File "stdin", line 5
   m = text.match(/File ".*?", line (\d+)/);
-  if (m) {
-    push(Number(m[1]), 1, text);
-    return markers;
-  }
+  if (m) { push(Number(m[1]), 1, text); return markers; }
 
-  // Node.js: "at <anonymous>:12:5"
+  // Node: <anonymous>:12:5
   m = text.match(/<anonymous>:(\d+):(\d+)/);
-  if (m) {
-    push(Number(m[1]), Number(m[2]), text);
-    return markers;
-  }
+  if (m) { push(Number(m[1]), Number(m[2]), text); return markers; }
 
-  // Fallback: show at top
   push(1, 1, text);
   return markers;
 }
 
-// Stable random IDs persisted in localStorage (demo-friendly)
+// ---------- helpers: ids (stable randoms) ----------
 function getOrCreate(ctxKey, prefix) {
   let v = localStorage.getItem(ctxKey);
   if (!v) {
@@ -72,6 +58,9 @@ function getOrCreate(ctxKey, prefix) {
   }
   return v;
 }
+function newSessionId() {
+  return `sess_${Math.random().toString(36).slice(2)}_${Date.now()}`;
+}
 
 export default function Judge0Editor({
   apiBaseUrl,
@@ -79,7 +68,7 @@ export default function Judge0Editor({
   onRunStart,
   onRunFinish,
 }) {
-  // Demo context IDs (replace with real values when integrating SSO/session)
+  // Demo context IDs (persisted); replace with real IDs when integrated
   const candidateId = useRef(getOrCreate(CAND_ID_KEY, "cand")).current;
   const screeningTestId = useRef(getOrCreate(TEST_ID_KEY, "test")).current;
 
@@ -120,6 +109,11 @@ export default function Judge0Editor({
   const saveTimerRef = useRef(null);
   const lastSavedPayloadRef = useRef("");
 
+  // SESSION REPLAY (Option A) state/refs
+  const sessionIdRef = useRef(null);
+  const eventBufferRef = useRef([]);
+  const flushTimerRef = useRef(null);
+
   const monacoLanguage = useMemo(() => {
     if (!languageId) return "plaintext";
     return JUDGE0_TO_MONACO[languageId] || "plaintext";
@@ -159,6 +153,10 @@ export default function Judge0Editor({
     const loadDraftOrScaffold = async () => {
       if (!selectedQuestion?._id || !languageId) return;
 
+      // Start a fresh editor session for replay logging
+      sessionIdRef.current = newSessionId();
+      eventBufferRef.current = [];
+
       // Try draft first
       try {
         const { data } = await axios.get(`${apiBaseUrl}/draft`, {
@@ -190,7 +188,7 @@ export default function Judge0Editor({
         }
       }
 
-      // Clear markers when language changes (different compiler)
+      // Clear markers when language changes
       if (editorRef.current && monacoRef.current) {
         monacoRef.current.editor.setModelMarkers(editorRef.current.getModel(), "judge", []);
       }
@@ -198,24 +196,57 @@ export default function Judge0Editor({
     loadDraftOrScaffold();
   }, [selectedQuestion?._id, languageId, apiBaseUrl, candidateId, screeningTestId]);
 
-  // Lazy-load visible tests when opening footer or switching to the tab
+  // Start/stop periodic FLUSH for session replay buffer (every 3s)
   useEffect(() => {
-    const loadVisible = async () => {
-      if (!footerOpen || activeTab !== "visible" || !selectedQuestion?._id) return;
-      setVtLoading(true);
+    if (!selectedQuestion?._id || !languageId) return;
+
+    if (flushTimerRef.current) clearInterval(flushTimerRef.current);
+    flushTimerRef.current = setInterval(async () => {
+      const buf = eventBufferRef.current;
+      if (!buf.length) return;
+      eventBufferRef.current = [];
       try {
-        const { data } = await axios.get(
-          `${apiBaseUrl}/questions/${selectedQuestion._id}/visible-tests`
-        );
-        setVisibleTests(data?.cases || []);
-      } catch {
-        setVisibleTests([]);
-      } finally {
-        setVtLoading(false);
+        await axios.post(`${apiBaseUrl}/editor-events`, {
+          sessionId: sessionIdRef.current,
+          candidate_id: candidateId,
+          screening_test_id: screeningTestId,
+          questionId: selectedQuestion._id,
+          languageId,
+          events: buf,
+        });
+      } catch (e) {
+        // Re-queue events on failure so we don't lose them
+        eventBufferRef.current.unshift(...buf);
       }
+    }, 3000);
+
+    return () => {
+      if (flushTimerRef.current) clearInterval(flushTimerRef.current);
     };
-    loadVisible();
-  }, [footerOpen, activeTab, selectedQuestion?._id, apiBaseUrl]);
+  }, [selectedQuestion?._id, languageId, apiBaseUrl, candidateId, screeningTestId]);
+
+  // Flush remaining events on unload
+  useEffect(() => {
+    const handler = () => {
+      const buf = eventBufferRef.current;
+      if (!buf.length) return;
+      try {
+        navigator.sendBeacon?.(
+          `${apiBaseUrl}/editor-events`,
+          new Blob([JSON.stringify({
+            sessionId: sessionIdRef.current,
+            candidate_id: candidateId,
+            screening_test_id: screeningTestId,
+            questionId: selectedQuestion?._id,
+            languageId,
+            events: buf,
+          })], { type: "application/json" })
+        );
+      } catch {}
+    };
+    window.addEventListener("beforeunload", handler);
+    return () => window.removeEventListener("beforeunload", handler);
+  }, [apiBaseUrl, candidateId, screeningTestId, selectedQuestion?._id, languageId]);
 
   const persistAttempts = (qId, next) => {
     localStorage.setItem(attemptsKey(qId), String(next));
@@ -452,6 +483,37 @@ export default function Judge0Editor({
           onMount={(editor, monaco) => {
             editorRef.current = editor;
             monacoRef.current = monaco;
+
+            // SESSION REPLAY listeners
+            editor.onDidChangeModelContent((e) => {
+              const ts = Date.now();
+              for (const c of e.changes) {
+                eventBufferRef.current.push({
+                  t: ts,
+                  type: "change",
+                  range: c.range,        // {startLineNumber, startColumn, endLineNumber, endColumn}
+                  text: c.text,          // inserted text
+                  rangeLength: c.rangeLength, // deleted chars count
+                  versionId: editor.getModel()?.getVersionId(),
+                });
+              }
+            });
+
+            editor.onDidChangeCursorPosition((e) => {
+              eventBufferRef.current.push({
+                t: Date.now(),
+                type: "cursor",
+                position: e.position, // { lineNumber, column }
+              });
+            });
+
+            editor.onDidChangeCursorSelection((e) => {
+              eventBufferRef.current.push({
+                t: Date.now(),
+                type: "selection",
+                selection: e.selection, // { startLineNumber, startColumn, endLineNumber, endColumn }
+              });
+            });
           }}
           options={{
             fontSize: 14,

@@ -8,6 +8,7 @@ const Question = require("./models/Question");
 const Scaffold = require("./models/Scaffold");
 const Submission = require("./models/Submission");
 const SubmissionDraft = require("./models/SubmissionDraft");
+const EditorSession = require("./models/EditorSession");
 
 const app = express();
 app.use(cors({
@@ -406,6 +407,58 @@ app.get("/api/submissions/:candidate_id/:screening_test_id", async (req, res) =>
   } catch (err) {
     console.error("GET /api/submissions error:", err);
     res.status(500).json({ error: "Failed to fetch submissions" });
+  }
+});
+
+const EditorSession = require("./models/EditorSession");
+
+// Capture editor events (append to session)
+app.post("/api/editor-events", async (req, res) => {
+  try {
+    const { sessionId, candidate_id, screening_test_id, questionId, languageId, events } = req.body || {};
+    if (!sessionId || !questionId) {
+      return res.status(400).json({ error: "sessionId & questionId required" });
+    }
+    await EditorSession.updateOne(
+      { sessionId },
+      {
+        $setOnInsert: { candidate_id, screening_test_id, questionId, languageId },
+        $push: { events: { $each: events || [] } },
+      },
+      { upsert: true }
+    );
+    res.json({ ok: true, appended: (events || []).length });
+  } catch (e) {
+    console.error("POST /api/editor-events", e);
+    res.status(500).json({ error: "Failed to append events" });
+  }
+});
+
+// Get one session by id
+app.get("/api/editor-sessions/:sessionId", async (req, res) => {
+  try {
+    const doc = await EditorSession.findOne({ sessionId: req.params.sessionId }).lean();
+    if (!doc) return res.status(404).json({ error: "Session not found" });
+    res.json({ session: doc });
+  } catch (e) {
+    console.error("GET /api/editor-sessions/:sessionId", e);
+    res.status(500).json({ error: "Failed to fetch session" });
+  }
+});
+
+// List recent sessions (filterable)
+app.get("/api/editor-sessions", async (req, res) => {
+  try {
+    const { candidate_id, screening_test_id, questionId, limit = 20 } = req.query;
+    const q = {};
+    if (candidate_id) q.candidate_id = candidate_id;
+    if (screening_test_id) q.screening_test_id = screening_test_id;
+    if (questionId) q.questionId = questionId;
+    const docs = await EditorSession.find(q).sort({ createdAt: -1 }).limit(Number(limit)).lean();
+    res.json({ sessions: docs });
+  } catch (e) {
+    console.error("GET /api/editor-sessions", e);
+    res.status(500).json({ error: "Failed to list sessions" });
   }
 });
 

@@ -1,11 +1,48 @@
+// App.js
 import React, { useState, useEffect, useMemo, useRef } from "react";
+import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-dom";
 import axios from "axios";
 import "./App.css";
 import Judge0Editor from "./components/Judge0Editor";
+import SessionReplay from "./components/SessionReplay";
 
 const LS_KEY = "ui:leftWidth";
+const API_BASE_URL = "https://coding-platform-teq9.onrender.com/api";
 
-export default function App() {
+// ---------------------- Top Nav ----------------------
+function TopNav() {
+  const loc = useLocation();
+  const atReplay = loc.pathname.startsWith("/replay");
+  return (
+    <div className="w-full border-b bg-white">
+      <div className="mx-auto max-w-screen-2xl px-4 py-2 flex items-center gap-3">
+        <div className="text-xl font-semibold">Coding Platform</div>
+        <Link
+          to="/"
+          className={`px-3 py-1 rounded border text-sm ${
+            !atReplay ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100"
+          }`}
+        >
+          Solve
+        </Link>
+        <Link
+          to="/replay"
+          className={`px-3 py-1 rounded border text-sm ${
+            atReplay ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100"
+          }`}
+        >
+          Session Replay
+        </Link>
+        <div className="ml-auto text-xs text-gray-500">
+          API: <code>{API_BASE_URL.replace(/^https?:\/\//, "")}</code>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------- Main Coding App (your original UI) ----------------------
+function MainCodingApp() {
   const [questions, setQuestions] = useState([]);
   const [selectedQuestion, setSelectedQuestion] = useState(null);
   const [activeTab, setActiveTab] = useState("list"); // 'list' | 'details'
@@ -15,15 +52,14 @@ export default function App() {
   // ----- Resizable split state -----
   const [leftWidth, setLeftWidth] = useState(() => {
     const saved = Number(localStorage.getItem(LS_KEY));
-    // default ~40% of typical 1440px screen
-    return Number.isFinite(saved) && saved > 0 ? saved : 520;
+    return Number.isFinite(saved) && saved > 0 ? saved : 520; // default ~40% on 1440px
   });
   const draggingRef = useRef(false);
 
   // Clamp and persist when leftWidth changes
   useEffect(() => {
-    const min = 300;                      // min left pane
-    const max = Math.max(480, window.innerWidth * 0.7); // cap at ~70vw
+    const min = 300;
+    const max = Math.max(480, window.innerWidth * 0.7);
     const clamped = Math.min(Math.max(leftWidth, min), max);
     if (clamped !== leftWidth) setLeftWidth(clamped);
     localStorage.setItem(LS_KEY, String(clamped));
@@ -33,9 +69,8 @@ export default function App() {
   useEffect(() => {
     const onMove = (e) => {
       if (!draggingRef.current) return;
-      // left width = mouse X, but clamp so right pane has room
       const minLeft = 280;
-      const minRight = 420; // keep editor usable
+      const minRight = 420;
       const maxLeft = Math.max(minLeft, window.innerWidth - minRight);
       const next = Math.min(Math.max(e.clientX, minLeft), maxLeft);
       setLeftWidth(next);
@@ -60,9 +95,6 @@ export default function App() {
     document.body.style.userSelect = "none";
     document.body.style.cursor = "col-resize";
   };
-
-  // Backend base URL
-  const API_BASE_URL = "https://coding-platform-teq9.onrender.com/api";
 
   // Load questions
   useEffect(() => {
@@ -90,14 +122,14 @@ export default function App() {
     try {
       const { data } = await axios.get(`${API_BASE_URL}/questions/${id}`);
       setSelectedQuestion(data);
-      setActiveTab("details"); // full-height details
+      setActiveTab("details");
     } catch (err) {
       console.error("Error fetching question:", err);
     }
   };
 
   return (
-    <div className="h-screen w-screen overflow-hidden flex">
+    <div className="h-[calc(100vh-49px)] w-screen overflow-hidden flex">
       {/* LEFT PANE (resizable) */}
       <div
         className="h-full bg-gray-50 border-r flex flex-col"
@@ -105,7 +137,6 @@ export default function App() {
       >
         {/* Tabs Header (sticky) */}
         <div className="px-3 pt-3 bg-gray-50 border-b sticky top-0 z-10">
-          <h1 className="text-2xl font-bold mb-3">Coding Platform</h1>
           <div className="flex items-center gap-2">
             {["list", "details"].map((key) => (
               <button
@@ -321,5 +352,18 @@ export default function App() {
         <Judge0Editor apiBaseUrl={API_BASE_URL} selectedQuestion={selectedQuestion} />
       </div>
     </div>
+  );
+}
+
+// ---------------------- App with Routes ----------------------
+export default function App() {
+  return (
+    <BrowserRouter>
+      <TopNav />
+      <Routes>
+        <Route path="/" element={<MainCodingApp />} />
+        <Route path="/replay" element={<SessionReplay apiBaseUrl={API_BASE_URL} />} />
+      </Routes>
+    </BrowserRouter>
   );
 }
