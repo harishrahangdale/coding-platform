@@ -369,18 +369,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
       <div className="flex-1 flex flex-col p-6">
         <div className="flex items-center justify-between mb-3">
           <div className="text-lg font-medium text-gray-800">Playback</div>
-          <div className="flex items-center gap-2">
-            <span className="text-sm text-gray-600">Speed</span>
-            <select
-              className="border rounded px-2 py-1 bg-white"
-              value={speed}
-              onChange={(e) => setSpeed(Number(e.target.value))}
-            >
-              <option value={0.5}>0.5×</option>
-              <option value={1}>1×</option>
-              <option value={2}>2×</option>
-            </select>
-          </div>
         </div>
 
         {/* Video frame (editor + overlay controls) */}
