@@ -17,21 +17,29 @@ function healJsonString(str) {
 function extractJsonArray(text) {
   if (!text) return [];
   let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
   } catch (_) {}
+
   const firstIdx = cleaned.indexOf("[");
   const lastIdx = cleaned.lastIndexOf("]");
-  if (firstIdx !== -1 && lastIdx > firstIdx) {
+  if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
     let jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
     try {
-      return JSON.parse(jsonSub);
+      const parsed = JSON.parse(jsonSub);
+      if (Array.isArray(parsed)) return parsed;
     } catch (err) {
       try {
-        return JSON.parse(healJsonString(jsonSub));
+        const healed = healJsonString(jsonSub);
+        const parsed = JSON.parse(healed);
+        if (Array.isArray(parsed)) {
+          console.log("💊 Healed JSON parse succeeded");
+          return parsed;
+        }
       } catch (err2) {
-        console.error("❌ extractJsonArray failed:", err2.message);
+        console.error("❌ Healed parse failed:", err2.message);
       }
     }
   }
@@ -71,78 +79,62 @@ async function isDuplicate(question) {
   return false;
 }
 
-/** ---------- Default Scaffold Generator ---------- */
-function defaultScaffold(languageId, languageName) {
-  if (languageName.toLowerCase().includes("java")) {
-    return `import java.util.*;\npublic class Main {\n  static void solve() {\n    // TODO: implement\n  }\n  public static void main(String[] args) {\n    Scanner sc = new Scanner(System.in);\n    // TODO: parse input and call solve()\n  }\n}`;
+/** ---------- Scaffold Placeholder Generator ---------- */
+function generatePlaceholderScaffold(lang) {
+  if (lang.includes("Java")) {
+    return `import java.util.*;\npublic class Main {\n  public static void main(String[] args) {\n    Scanner sc = new Scanner(System.in);\n    // TODO: parse input and call solve()\n  }\n  static void solve() {\n    // TODO: implement\n  }\n}`;
   }
-  if (languageName.toLowerCase().includes("python")) {
-    return `def solve():\n    # TODO: implement\n    pass\n\nif __name__ == "__main__":\n    solve()`;
+  if (lang.includes("Python")) {
+    return `def solve():\n    # TODO: implement\n\nif __name__ == "__main__":\n    solve()`;
   }
-  if (languageName.toLowerCase().includes("c++")) {
+  if (lang.includes("C++")) {
     return `#include <bits/stdc++.h>\nusing namespace std;\n\nvoid solve() {\n    // TODO: implement\n}\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    solve();\n    return 0;\n}`;
   }
-  return "// TODO: implement";
+  return "// TODO: implement scaffold";
 }
 
 /** ---------- Prompt Builder ---------- */
-function buildPrompt({
-  jobDescription,
-  seniorityLevels,
-  experienceRange,
-  numQuestions,
-  distribution,
-  languages,
-}) {
+function buildPrompt({ jobDescription, seniorityLevels, experienceRange, distribution, languages }) {
   return `
-You are an expert coding interview question generator. Generate ${numQuestions} **unique and complete** coding questions.
+You are an expert coding interview question generator. Generate exactly:
+- ${distribution.Easy} Easy questions
+- ${distribution.Medium} Medium questions
+- ${distribution.Hard} Hard questions
 
 Job Description: ${jobDescription}
-Seniority Levels: ${
-    Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels
-  }
+Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
 Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
+Languages required: ${(languages || []).map((l) => l.languageName || l).join(", ")}
 
-Difficulty Distribution:
-- Easy: ${distribution.Easy}
-- Medium: ${distribution.Medium}
-- Hard: ${distribution.Hard}
-
-Languages required (ONLY these): ${(languages || [])
-    .map((l) => l.languageName || l)
-    .join(", ")}
-
-Schema (must include ALL fields, no omissions):
+Schema (strict, all fields required):
 {
-  "title": "string (unique)",
+  "title": "string (unique, no random IDs)",
   "description": "string (detailed problem statement)",
   "difficulty": "Easy | Medium | Hard",
   "tags": ["string"],
-  "sampleInput": "string (must map to a test case)",
-  "sampleOutput": "string (must map to a test case)",
+  "sampleInput": "string (must map to one of testCases)",
+  "sampleOutput": "string (must map to one of testCases)",
   "testCases": [
     { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
   ],
   "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code with driver + TODO method" }
+    { "languageId": number, "languageName": "string", "body": "starter code" }
   ]
 }
 
 Rules:
-- At least 5 test cases (cover normal, edge, boundary). ≥2 visible.
-- sampleInput/sampleOutput must match one of the test cases (never blank/N/A).
-- Generate scaffolds ONLY for the selected languages.
-- Each scaffold must include:
-  - Judge0-safe imports/wrappers.
-  - A single TODO method.
-  - Driver parsing stdin/stdout.
-- Java: public class Main + static method.
-- Python: def solve().
-- C++: #include <bits/stdc++.h> + int main().
+- At least 5 test cases (normal + edge + boundary). At least 2 visible.
+- sampleInput/sampleOutput must never be empty or N/A.
+- Each difficulty must match exactly the requested distribution.
+- Scaffolds required for ALL selected languages.
+- Scaffold must include driver + a single solve method with TODO.
+- Always include imports/wrappers Judge0 expects:
+  - Java → public class Main
+  - Python → def solve()
+  - C++ → #include <bits/stdc++.h>
+- Titles must be descriptive but unique, no random tokens.
 
-Add randomness, avoid duplicates. Append hidden uniqueness token: ${Date.now()}.
-
-Return only a **valid JSON array** of questions, no commentary.
+Return only a valid JSON array of questions, no commentary.
 `;
 }
 
@@ -150,14 +142,16 @@ Return only a **valid JSON array** of questions, no commentary.
 async function callAI(primaryModel, prompt) {
   const openaiKey = process.env.OPENAI_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
+
   async function callOpenAI() {
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
-      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.9 },
+      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.8 },
       { headers: { Authorization: `Bearer ${openaiKey}` } }
     );
     return res.data.choices[0].message.content;
   }
+
   async function callGemini() {
     const res = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
@@ -166,6 +160,7 @@ async function callAI(primaryModel, prompt) {
     );
     return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
   }
+
   try {
     return primaryModel === "openai" ? await callOpenAI() : await callGemini();
   } catch (err) {
@@ -178,18 +173,20 @@ async function callAI(primaryModel, prompt) {
 /** ---------- Deduplication Utility ---------- */
 async function ensureUnique(question, model, basePrompt, seenCache = []) {
   let attempts = 0;
-  while (attempts < 3) {
+  while (attempts < 2) {
     const inBatchDup = seenCache.some(
-      (q) =>
-        levenshtein(q.title, question.title) > 0.85 ||
-        levenshtein(q.description, question.description) > 0.85
+      (q) => levenshtein(q.title, question.title) > 0.85 || levenshtein(q.description, question.description) > 0.85
     );
     const dbDup = await isDuplicate(question);
-    if (!inBatchDup && !dbDup) return question;
+
+    const hasScaffolds = question.scaffolds && question.scaffolds.length > 0;
+    const hasTests = question.testCases && question.testCases.length >= 5;
+    const hasSample = question.sampleInput && question.sampleOutput;
+
+    if (!inBatchDup && !dbDup && hasScaffolds && hasTests && hasSample) return question;
+
     attempts++;
-    const regenPrompt =
-      basePrompt +
-      `\n\nImportant: avoid duplicates. Do NOT reuse:\n- ${question.title}\n- ${question.description}\n`;
+    const regenPrompt = basePrompt + `\n\nRegenerate with full schema, avoid duplicates, enforce difficulty.`;
     let aiResponse = await callAI(model, regenPrompt);
     const [regenQ] = extractJsonArray(aiResponse);
     question = regenQ || question;
@@ -200,32 +197,38 @@ async function ensureUnique(question, model, basePrompt, seenCache = []) {
 /** ---------- Generate Questions ---------- */
 router.post("/generate-questions", async (req, res) => {
   const { jobDescription, seniorityLevels, experienceRange, numQuestions, totalTime, model, languages } = req.body;
+
   try {
     let easy = Math.floor(numQuestions * 0.3);
     let medium = Math.floor(numQuestions * 0.5);
     let hard = numQuestions - (easy + medium);
     const distribution = { Easy: easy, Medium: medium, Hard: hard };
 
-    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions, distribution, languages });
+    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, distribution, languages });
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
-    const uniqueQuestions = [];
+    // enforce per-difficulty count
+    const grouped = { Easy: [], Medium: [], Hard: [] };
     for (const q of questions) {
-      let uq = await ensureUnique(q, model, prompt, uniqueQuestions);
-      // Ensure scaffolds exist for all selected languages
-      const requiredLangs = languages.map(l => l.languageName);
-      const scaffolded = requiredLangs.map(langName => {
-        let existing = uq.scaffolds?.find(s => s.languageName === langName);
-        if (!existing || !existing.body?.trim()) {
-          const langObj = languages.find(l => l.languageName === langName);
-          return { languageId: langObj.languageId, languageName: langObj.languageName, body: defaultScaffold(langObj.languageId, langObj.languageName) };
-        }
-        return existing;
-      });
-      uq = { ...uq, scaffolds: scaffolded, timeAllowed: Math.floor(totalTime / numQuestions) || 15 };
-      uniqueQuestions.push(uq);
+      if (grouped[q.difficulty]) grouped[q.difficulty].push(q);
     }
+    const selected = [
+      ...grouped.Easy.slice(0, distribution.Easy),
+      ...grouped.Medium.slice(0, distribution.Medium),
+      ...grouped.Hard.slice(0, distribution.Hard),
+    ];
+
+    const uniqueQuestions = [];
+    for (const q of selected) {
+      const uq = await ensureUnique(q, model, prompt, uniqueQuestions);
+      const scaffolds = (languages || []).map((lang) => {
+        const existing = (uq.scaffolds || []).find((s) => s.languageName === lang.languageName);
+        return existing || { languageId: lang.languageId, languageName: lang.languageName, body: generatePlaceholderScaffold(lang.languageName) };
+      });
+      uniqueQuestions.push({ ...uq, scaffolds, timeAllowed: Math.floor(totalTime / numQuestions) || 15 });
+    }
+
     res.json({ questions: uniqueQuestions, distribution });
   } catch (err) {
     res.status(500).json({ error: "Failed to generate questions" });
@@ -235,23 +238,49 @@ router.post("/generate-questions", async (req, res) => {
 /** ---------- Regenerate Question ---------- */
 router.post("/regenerate-question", async (req, res) => {
   const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages } = req.body;
+
   try {
-    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions: 1, distribution: { [difficulty]: 1 }, languages });
+    const prompt = `
+Generate exactly 1 **new unique ${difficulty}** coding question.
+
+Job Description: ${jobDescription}
+Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
+Languages: ${languages.map((l) => l.languageName || l).join(", ")}
+
+Schema (strict, all fields required):
+{
+  "title": "string (unique)",
+  "description": "string",
+  "difficulty": "${difficulty}",
+  "tags": ["string"],
+  "sampleInput": "string",
+  "sampleOutput": "string",
+  "testCases": [
+    { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
+  ],
+  "scaffolds": [
+    { "languageId": number, "languageName": "string", "body": "starter code" }
+  ]
+}
+
+Rules:
+- Must include ≥5 test cases (2 visible).
+- sampleInput/sampleOutput must map to a testCase.
+- Scaffolds required for all selected languages.
+- Must not duplicate any previous question.
+`;
+
     let aiResponse = await callAI(model, prompt);
     let [question] = extractJsonArray(aiResponse);
     question = await ensureUnique(question, model, prompt);
-    // Ensure scaffolds for all selected languages
-    const requiredLangs = languages.map(l => l.languageName);
-    const scaffolded = requiredLangs.map(langName => {
-      let existing = question.scaffolds?.find(s => s.languageName === langName);
-      if (!existing || !existing.body?.trim()) {
-        const langObj = languages.find(l => l.languageName === langName);
-        return { languageId: langObj.languageId, languageName: langObj.languageName, body: defaultScaffold(langObj.languageId, langObj.languageName) };
-      }
-      return existing;
+
+    const scaffolds = (languages || []).map((lang) => {
+      const existing = (question.scaffolds || []).find((s) => s.languageName === lang.languageName);
+      return existing || { languageId: lang.languageId, languageName: lang.languageName, body: generatePlaceholderScaffold(lang.languageName) };
     });
-    question = { ...question, scaffolds: scaffolded };
-    res.json({ question });
+
+    res.json({ question: { ...question, scaffolds } });
   } catch (err) {
     res.status(500).json({ error: "Failed to regenerate question" });
   }
@@ -262,12 +291,14 @@ router.post("/save-questions", async (req, res) => {
   try {
     const { questions, draft } = req.body;
     let savedQuestions = [];
+
     for (const q of questions) {
       const { scaffolds, ...questionData } = q;
       const question = new Question({ ...questionData, draft: !!draft });
       await question.save();
-      if (scaffolds?.length > 0) {
-        const scaffoldDocs = scaffolds.map(s => ({ ...s, questionId: question._id }));
+
+      if (scaffolds && scaffolds.length > 0) {
+        const scaffoldDocs = scaffolds.map((s) => ({ ...s, questionId: question._id }));
         await Scaffold.insertMany(scaffoldDocs);
       }
       savedQuestions.push(question);
