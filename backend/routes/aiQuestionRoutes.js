@@ -1,4 +1,3 @@
-// backend/routes/aiQuestionRoutes.js
 const express = require("express");
 const axios = require("axios");
 const Question = require("../models/Question");
@@ -11,13 +10,9 @@ const router = express.Router();
  */
 function healJsonString(str) {
   return str
-    // Remove control characters
     .replace(/[\u0000-\u0019]+/g, " ")
-    // Remove trailing commas before ] or }
     .replace(/,\s*([}\]])/g, "$1")
-    // Escape unescaped newlines inside strings
     .replace(/([^\\])\n/g, "$1\\n")
-    // Ensure backslashes are properly escaped
     .replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
 }
 
@@ -27,29 +22,22 @@ function healJsonString(str) {
 function extractJsonArray(text) {
   if (!text) return [];
 
-  // Remove Markdown fences
   let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-  // Try direct parse
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
   } catch (_) {}
 
-  // Slice between [ ... ]
   const firstIdx = cleaned.indexOf("[");
   const lastIdx = cleaned.lastIndexOf("]");
   if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
     let jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
-
-    // Try parse directly
     try {
       const parsed = JSON.parse(jsonSub);
       if (Array.isArray(parsed)) return parsed;
     } catch (err) {
       console.warn("⚠️ extractJsonArray fallback parse failed:", err.message);
-
-      // Apply healing and retry
       try {
         const healed = healJsonString(jsonSub);
         const parsed = JSON.parse(healed);
@@ -70,20 +58,20 @@ function extractJsonArray(text) {
 /**
  * Utility: Build AI prompt
  */
-function buildPrompt({ jobDescription, seniorityLevel, experienceYears, numQuestions, distribution, languages }) {
+function buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions, distribution, languages }) {
   return `
 You are an expert coding interview question generator. Based on the job description and requirements below, generate ${numQuestions} coding questions.
 
 Job Description: ${jobDescription}
-Seniority Level: ${seniorityLevel}
-Experience: ${experienceYears} years
+Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
 
 Difficulty Distribution:
 - Easy: ${distribution.Easy}
 - Medium: ${distribution.Medium}
 - Hard: ${distribution.Hard}
 
-Languages required: ${languages.map((l) => l.languageName || l).join(", ")}
+Languages required: ${(languages || []).map((l) => l.languageName || l).join(", ")}
 
 Rules for each generated question:
 - Must strictly follow this schema:
@@ -108,12 +96,16 @@ Test Case Guidelines:
 - Each test case must have an explanation.
 
 Scaffold Guidelines:
-- For each selected language (${languages.map((l) => l.languageName || l).join(", ")}), generate a scaffold.
+- For each selected language (${(languages || []).map((l) => l.languageName || l).join(", ")}), generate a scaffold.
 - Scaffold must include:
   - A single public method (or function) named according to the problem context (not always "solve").
   - The method should only contain a TODO comment.
-  - A main() / driver code block that handles stdin/stdout in the style of HackerRank/HackerEarth.
-  - Driver should parse input and call the method, then print the result.
+  - A main()/driver block that handles stdin/stdout in the style of HackerRank/HackerEarth.
+  - Driver must parse input and call the method, then print the result.
+- Always include the proper imports/wrappers that Judge0 expects:
+  - **Java**: Must be inside \`public class Main { ... }\`, with a static method for the solution.
+  - **Python**: Define \`def solve(...):\` for the solution, then call it after parsing input.
+  - **C++**: Use \`#include <bits/stdc++.h>\` and implement solution logic inside a separate function, with \`int main()\` parsing input and printing output.
 
 Return only a **valid JSON array** of questions, with no extra commentary.
 `;
@@ -131,11 +123,7 @@ async function callAI(primaryModel, prompt) {
     console.log("⚡ Calling OpenAI GPT...");
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-      },
+      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.7 },
       { headers: { Authorization: `Bearer ${openaiKey}` } }
     );
     return res.data.choices[0].message.content;
@@ -156,7 +144,6 @@ async function callAI(primaryModel, prompt) {
   } catch (err) {
     console.error(`❌ ${primaryModel} primary call failed:`, err.response?.data || err.message);
     console.log("🔄 Falling back...");
-
     if (primaryModel === "openai" && geminiKey) return callGemini();
     if (primaryModel === "gemini" && openaiKey) return callOpenAI();
     throw err;
@@ -165,10 +152,9 @@ async function callAI(primaryModel, prompt) {
 
 // ---------- Generate Questions ----------
 router.post("/generate-questions", async (req, res) => {
-  const { jobDescription, seniorityLevel, experienceYears, numQuestions, totalTime, model, languages } = req.body;
+  const { jobDescription, seniorityLevels, experienceRange, numQuestions, totalTime, model, languages } = req.body;
 
   try {
-    // Balanced distribution (ensures sum == numQuestions)
     let easy = Math.floor(numQuestions * 0.3);
     let medium = Math.floor(numQuestions * 0.5);
     let hard = numQuestions - (easy + medium);
@@ -180,7 +166,7 @@ router.post("/generate-questions", async (req, res) => {
     const distribution = { Easy: easy, Medium: medium, Hard: hard };
     console.log("📊 Final distribution:", distribution);
 
-    const prompt = buildPrompt({ jobDescription, seniorityLevel, experienceYears, numQuestions, distribution, languages });
+    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions, distribution, languages });
     console.log("📝 Prompt built, length:", prompt.length);
 
     let aiResponse = await callAI(model, prompt);
@@ -198,15 +184,15 @@ router.post("/generate-questions", async (req, res) => {
 
 // ---------- Regenerate Single Question ----------
 router.post("/regenerate-question", async (req, res) => {
-  const { jobDescription, seniorityLevel, experienceYears, difficulty, model, languages } = req.body;
+  const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages } = req.body;
 
   try {
     const prompt = `
 Generate 1 unique ${difficulty} coding question for:
 
 Job Description: ${jobDescription}
-Seniority Level: ${seniorityLevel}
-Experience: ${experienceYears} years
+Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
 Languages: ${languages.map((l) => l.languageName || l).join(", ")}
 
 Rules:
@@ -214,6 +200,11 @@ Rules:
 - Must include at least 5 test cases (normal, edge, boundary cases).
 - At least 2 test cases must be visible.
 - Scaffold must contain a driver + a single public method with TODO.
+- Always include standard imports/wrappers:
+  - Java: public class Main
+  - Python: def solve()
+  - C++: #include <bits/stdc++.h>, main()
+
 Return a JSON array with exactly 1 question object, no extra commentary.
 `;
 
@@ -234,18 +225,13 @@ router.post("/save-questions", async (req, res) => {
 
     for (const q of questions) {
       const { scaffolds, ...questionData } = q;
-
       const question = new Question({ ...questionData, draft: !!draft });
       await question.save();
 
       if (scaffolds && scaffolds.length > 0) {
-        const scaffoldDocs = scaffolds.map((s) => ({
-          ...s,
-          questionId: question._id,
-        }));
+        const scaffoldDocs = scaffolds.map((s) => ({ ...s, questionId: question._id }));
         await Scaffold.insertMany(scaffoldDocs);
       }
-
       savedQuestions.push(question);
     }
 

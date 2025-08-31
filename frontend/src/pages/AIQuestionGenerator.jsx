@@ -1,8 +1,7 @@
 import React, { useState } from "react";
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
-import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
-import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
+import Editor from "@monaco-editor/react";
 
 const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL || "https://coding-platform-teq9.onrender.com/api";
@@ -13,21 +12,24 @@ const availableLanguages = [
   { languageId: 54, languageName: "C++ 17" },
 ];
 
+const availableSeniorities = ["Junior", "Mid", "Senior"];
+
 function detectLanguage(langName) {
-  if (!langName) return "text";
+  if (!langName) return "plaintext";
   const lower = langName.toLowerCase();
   if (lower.includes("java")) return "java";
   if (lower.includes("python")) return "python";
   if (lower.includes("c++")) return "cpp";
-  return "text";
+  return "plaintext";
 }
 
 export default function AIQuestionGenerator() {
   const [step, setStep] = useState(1);
   const [formData, setFormData] = useState({
     jobDescription: "",
-    seniorityLevel: "Junior",
-    experienceYears: 0,
+    seniorityLevels: [], // multiple
+    experienceMin: 0,
+    experienceMax: 5,
     numQuestions: 3,
     totalTime: 60,
     model: "openai",
@@ -41,6 +43,15 @@ export default function AIQuestionGenerator() {
 
   const handleChange = (e) =>
     setFormData({ ...formData, [e.target.name]: e.target.value });
+
+  const toggleSeniority = (level) => {
+    setFormData((prev) => ({
+      ...prev,
+      seniorityLevels: prev.seniorityLevels.includes(level)
+        ? prev.seniorityLevels.filter((s) => s !== level)
+        : [...prev.seniorityLevels, level],
+    }));
+  };
 
   const generateQuestions = async () => {
     setLoading(true);
@@ -87,8 +98,9 @@ export default function AIQuestionGenerator() {
     try {
       const res = await axios.post(`${API_BASE_URL}/regenerate-question`, {
         jobDescription: formData.jobDescription,
-        seniorityLevel: formData.seniorityLevel,
-        experienceYears: formData.experienceYears,
+        seniorityLevels: formData.seniorityLevels,
+        experienceMin: formData.experienceMin,
+        experienceMax: formData.experienceMax,
         difficulty: q.difficulty,
         model: formData.model,
         languages: formData.languages,
@@ -103,6 +115,21 @@ export default function AIQuestionGenerator() {
       toast.dismiss();
       toast.error("Failed to regenerate question.");
     }
+  };
+
+  const updateScaffold = (qi, langId, newCode) => {
+    setQuestions((prev) =>
+      prev.map((q, idx) =>
+        idx === qi
+          ? {
+              ...q,
+              scaffolds: q.scaffolds.map((s) =>
+                s.languageId === langId ? { ...s, body: newCode } : s
+              ),
+            }
+          : q
+      )
+    );
   };
 
   return (
@@ -153,27 +180,41 @@ export default function AIQuestionGenerator() {
       {/* Step 2 */}
       {step === 2 && (
         <div className="p-6 bg-white rounded shadow space-y-6">
-          {/* Seniority & Experience */}
+          {/* Seniority (multiple) */}
+          <div>
+            <label className="block text-sm font-medium mb-2">Seniority Levels</label>
+            <div className="flex gap-4">
+              {availableSeniorities.map((level) => (
+                <label key={level} className="flex items-center gap-1">
+                  <input
+                    type="checkbox"
+                    checked={formData.seniorityLevels.includes(level)}
+                    onChange={() => toggleSeniority(level)}
+                  />
+                  {level}
+                </label>
+              ))}
+            </div>
+          </div>
+
+          {/* Experience Range */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Seniority Level</label>
-              <select
-                name="seniorityLevel"
-                value={formData.seniorityLevel}
-                onChange={handleChange}
-                className="w-full border p-2 rounded"
-              >
-                <option>Junior</option>
-                <option>Mid</option>
-                <option>Senior</option>
-              </select>
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Years of Experience</label>
+              <label className="block text-sm font-medium mb-1">Experience Min (years)</label>
               <input
                 type="number"
-                name="experienceYears"
-                value={formData.experienceYears}
+                name="experienceMin"
+                value={formData.experienceMin}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium mb-1">Experience Max (years)</label>
+              <input
+                type="number"
+                name="experienceMax"
+                value={formData.experienceMax}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
               />
@@ -268,6 +309,7 @@ export default function AIQuestionGenerator() {
             </select>
           </div>
 
+          {/* Buttons */}
           <div className="flex gap-4">
             <button
               onClick={generateQuestions}
@@ -366,20 +408,19 @@ export default function AIQuestionGenerator() {
                             (!activeScaffoldTab[i] && s === q.scaffolds[0])
                         )
                         .map((s) => (
-                          <SyntaxHighlighter
+                          <Editor
                             key={s.languageId}
-                            language={detectLanguage(s.languageName)}
-                            style={vscDarkPlus}
-                            customStyle={{
-                              borderRadius: "0.5rem",
-                              padding: "1rem",
-                              fontSize: "0.85rem",
-                              maxHeight: "15rem",
-                              overflow: "auto",
+                            height="250px"
+                            defaultLanguage={detectLanguage(s.languageName)}
+                            value={s.body}
+                            onChange={(newValue) => updateScaffold(i, s.languageId, newValue)}
+                            theme="vs-dark"
+                            options={{
+                              minimap: { enabled: false },
+                              fontSize: 13,
+                              scrollBeyondLastLine: false,
                             }}
-                          >
-                            {s.body}
-                          </SyntaxHighlighter>
+                          />
                         ))}
                     </div>
                   )}
