@@ -68,6 +68,7 @@ function levenshtein(a, b) {
       );
     }
   }
+
   const distance = matrix[a.length][b.length];
   return 1 - distance / Math.max(a.length, b.length);
 }
@@ -99,14 +100,13 @@ function buildPrompt({
   distribution,
   languages,
 }) {
-  const langs = (languages || [])
-    .map((l) => l.languageName || l)
-    .join(", ");
   return `
-You are an expert coding interview question generator. Generate ${numQuestions} **unique** coding questions.
+You are an expert coding interview question generator. Based on the job description and requirements below, generate ${numQuestions} **unique** coding questions.
 
 Job Description: ${jobDescription}
-Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Seniority Levels: ${
+    Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels
+  }
 Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
 
 Difficulty Distribution:
@@ -114,47 +114,51 @@ Difficulty Distribution:
 - Medium: ${distribution.Medium}
 - Hard: ${distribution.Hard}
 
-Languages required: ${langs}
+Languages required (only these, nothing else): ${(languages || [])
+    .map((l) => l.languageName || l)
+    .join(", ")}
 
 Rules for each generated question:
 - Must strictly follow this schema:
 {
   "title": "string (must be unique)",
-  "description": "string",
+  "description": "string (detailed problem statement)",
   "difficulty": "Easy | Medium | Hard",
   "tags": ["string"],
-  "sampleInput": "string (must exactly match the input of the first visible test case)",
-  "sampleOutput": "string (must exactly match the output of the first visible test case)",
+  "sampleInput": "string (must correspond to a test case)",
+  "sampleOutput": "string (must correspond to a test case)",
   "testCases": [
     { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
   ],
   "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code" }
+    { "languageId": number, "languageName": "string", "body": "starter code (non-empty)" }
   ]
 }
 
 Test Case Guidelines:
-- Always provide ≥ 5 test cases (normal + edge + boundary).
-- At least 2 must be visible.
-- Each must have an explanation.
-- sampleInput/sampleOutput must never be blank or "N/A" — must map to the first visible test case.
+- Always provide at least 5 test cases (normal, edge, boundary cases).
+- At least 2 test cases must be visible.
+- Each test case must have an explanation.
+- sampleInput/sampleOutput must never be empty or "N/A".
 
 Scaffold Guidelines:
-- Generate scaffolds **only** for: ${langs}.
-- Each scaffold must include:
-  - One public method/function with TODO.
-  - Driver code (stdin/stdout like HackerRank/HackerEarth).
-  - Proper Judge0 wrappers:
-    - Java: public class Main { ... }
-    - Python: def solve(...)
-    - C++: #include <bits/stdc++.h> with int main()
+- Generate scaffolds ONLY for the selected languages above.
+- Scaffold must include:
+  - A single public method (or function) named according to the problem context.
+  - The method should only contain a TODO comment.
+  - A main()/driver block that handles stdin/stdout in HackerRank/HackerEarth style.
+  - Driver must parse input and call the method, then print the result.
+- Always include imports/wrappers Judge0 expects:
+  - Java: public class Main { ... }
+  - Python: def solve(...)
+  - C++: #include <bits/stdc++.h>
 
 Additional:
-- Questions must be unique (no duplicates).
-- Add randomness so same inputs produce different outputs.
-- Hidden uniqueness token: ${Date.now()}.
+- Every generated question must be unique in title and description.
+- Add randomness so repeated inputs don’t produce the same output.
+- Append hidden uniqueness token: ${Date.now()}.
 
-Return only a JSON array of questions.
+Return only a valid JSON array of questions, no commentary.
 `;
 }
 
@@ -169,6 +173,7 @@ async function callAI(primaryModel, prompt) {
   });
 
   async function callOpenAI() {
+    console.log("⚡ Calling OpenAI GPT...");
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
       {
@@ -182,6 +187,7 @@ async function callAI(primaryModel, prompt) {
   }
 
   async function callGemini() {
+    console.log("⚡ Calling Gemini 2.0 Flash...");
     const res = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       { contents: [{ parts: [{ text: prompt }] }] },
@@ -195,14 +201,18 @@ async function callAI(primaryModel, prompt) {
   try {
     return primaryModel === "openai" ? await callOpenAI() : await callGemini();
   } catch (err) {
-    console.error(`❌ ${primaryModel} call failed:`, err.response?.data || err.message);
+    console.error(
+      `❌ ${primaryModel} primary call failed:`,
+      err.response?.data || err.message
+    );
+    console.log("🔄 Falling back...");
     if (primaryModel === "openai" && geminiKey) return callGemini();
     if (primaryModel === "gemini" && openaiKey) return callOpenAI();
     throw err;
   }
 }
 
-/** ---------- Deduplication ---------- */
+/** ---------- Deduplication Utility ---------- */
 async function ensureUnique(question, model, basePrompt, seenCache = []) {
   let attempts = 0;
   while (attempts < 3) {
@@ -213,21 +223,31 @@ async function ensureUnique(question, model, basePrompt, seenCache = []) {
     );
     const dbDup = await isDuplicate(question);
 
-    if (!inBatchDup && !dbDup) {
-      // Patch sampleInput/Output if missing
-      if ((!question.sampleInput || !question.sampleOutput) && question.testCases?.length) {
-        const vis = question.testCases.find((t) => t.visible) || question.testCases[0];
-        question.sampleInput = vis?.input || "1";
-        question.sampleOutput = vis?.output || "1";
-      }
+    const scaffoldMissing =
+      !question.scaffolds ||
+      question.scaffolds.length === 0 ||
+      question.scaffolds.some((s) => !s.body || s.body.trim() === "");
+
+    const sampleInvalid =
+      !question.sampleInput ||
+      !question.sampleOutput ||
+      question.sampleInput === "N/A" ||
+      question.sampleOutput === "N/A";
+
+    if (!inBatchDup && !dbDup && !scaffoldMissing && !sampleInvalid) {
       return question;
     }
 
+    console.warn(
+      `⚠️ Issue detected (dup=${inBatchDup || dbDup}, scaffoldMissing=${scaffoldMissing}, sampleInvalid=${sampleInvalid}), regenerating... attempt ${
+        attempts + 1
+      }`
+    );
     attempts++;
-    console.warn(`⚠️ Duplicate detected, regenerating attempt ${attempts}`);
+
     const regenPrompt =
       basePrompt +
-      `\nAvoid repeating:\n- ${question.title}\n- ${question.description}`;
+      `\n\nImportant: Avoid these titles/descriptions:\n- ${question.title}\n- ${question.description}\nEnsure scaffolds and sample I/O are always non-empty.`;
     let aiResponse = await callAI(model, regenPrompt);
     const [regenQ] = extractJsonArray(aiResponse);
     question = regenQ || question;
@@ -245,16 +265,21 @@ router.post("/generate-questions", async (req, res) => {
     totalTime,
     model,
     languages,
+    distributionOverride,
   } = req.body;
 
   try {
-    let easy = Math.floor(numQuestions * 0.3);
-    let medium = Math.floor(numQuestions * 0.5);
-    let hard = numQuestions - (easy + medium);
-    if (easy + medium + hard !== numQuestions) {
-      hard = numQuestions - (easy + medium);
+    let distribution = distributionOverride;
+    if (!distributionOverride) {
+      let easy = Math.floor(numQuestions * 0.3);
+      let medium = Math.floor(numQuestions * 0.5);
+      let hard = numQuestions - (easy + medium);
+      if (easy + medium + hard !== numQuestions) {
+        hard = numQuestions - (easy + medium);
+      }
+      distribution = { Easy: easy, Medium: medium, Hard: hard };
     }
-    const distribution = { Easy: easy, Medium: medium, Hard: hard };
+    console.log("📊 Final distribution:", distribution);
 
     const prompt = buildPrompt({
       jobDescription,
@@ -264,19 +289,19 @@ router.post("/generate-questions", async (req, res) => {
       distribution,
       languages,
     });
+    console.log("📝 Prompt built, length:", prompt.length);
 
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
-    // Dedup + scaffold filter
+    // Deduplicate + fix invalid scaffolds or sample I/O
     const uniqueQuestions = [];
     for (const q of questions) {
-      let uq = await ensureUnique(q, model, prompt, uniqueQuestions);
-      uq.scaffolds = (uq.scaffolds || []).filter((s) =>
-        (languages || []).some((l) => (l.languageName || l) === s.languageName)
-      );
-      uq.timeAllowed = Math.floor(totalTime / numQuestions) || 15;
-      uniqueQuestions.push(uq);
+      const uq = await ensureUnique(q, model, prompt, uniqueQuestions);
+      uniqueQuestions.push({
+        ...uq,
+        timeAllowed: Math.floor(totalTime / numQuestions) || 15,
+      });
     }
 
     res.json({ questions: uniqueQuestions, distribution });
@@ -288,37 +313,45 @@ router.post("/generate-questions", async (req, res) => {
 
 /** ---------- Regenerate Question ---------- */
 router.post("/regenerate-question", async (req, res) => {
-  const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages } =
-    req.body;
+  const {
+    jobDescription,
+    seniorityLevels,
+    experienceRange,
+    difficulty,
+    model,
+    languages,
+  } = req.body;
 
   try {
-    const langs = languages.map((l) => l.languageName || l).join(", ");
     const prompt = `
 Generate 1 **new unique** ${difficulty} coding question:
 
 Job Description: ${jobDescription}
-Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Seniority Levels: ${
+      Array.isArray(seniorityLevels)
+        ? seniorityLevels.join(", ")
+        : seniorityLevels
+    }
 Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
-Languages: ${langs}
+Languages (only these): ${languages.map((l) => l.languageName || l).join(", ")}
 
 Rules:
-- Must strictly follow schema.
-- ≥ 5 test cases, with ≥ 2 visible.
-- sampleInput/sampleOutput must equal the first visible test case.
-- Scaffold must exist for each of: ${langs} (and no others).
-- Include Judge0 wrappers (Java Main, Python solve(), C++ main()).
-- Must have a unique title/description.
-- Uniqueness token: ${Date.now()}.
+- Must strictly follow schema as before.
+- Must include at least 5 test cases (normal, edge, boundary cases).
+- At least 2 test cases must be visible.
+- sampleInput/sampleOutput must map to a test case (never N/A).
+- Scaffold must contain driver + single method with TODO.
+- Include Judge0 imports/wrappers (Java Main, Python solve(), C++ main()).
+- Must not repeat previous titles/descriptions.
+- Append hidden uniqueness token: ${Date.now()}.
 
-Return [question].
+Return a JSON array with exactly 1 question object.
 `;
 
     let aiResponse = await callAI(model, prompt);
     let [question] = extractJsonArray(aiResponse);
+
     question = await ensureUnique(question, model, prompt);
-    question.scaffolds = (question.scaffolds || []).filter((s) =>
-      (languages || []).some((l) => (l.languageName || l) === s.languageName)
-    );
 
     res.json({ question });
   } catch (err) {
@@ -338,7 +371,7 @@ router.post("/save-questions", async (req, res) => {
       const question = new Question({ ...questionData, draft: !!draft });
       await question.save();
 
-      if (scaffolds?.length) {
+      if (scaffolds && scaffolds.length > 0) {
         const scaffoldDocs = scaffolds.map((s) => ({ ...s, questionId: question._id }));
         await Scaffold.insertMany(scaffoldDocs);
       }
