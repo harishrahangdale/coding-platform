@@ -8,8 +8,6 @@ const router = express.Router();
 /** ---------- JSON Healing Utils ---------- */
 function healJsonString(str) {
   return str
-    .replace(/[“”]/g, '"')
-    .replace(/[‘’]/g, "'")
     .replace(/[\u0000-\u0019]+/g, " ")
     .replace(/,\s*([}\]])/g, "$1")
     .replace(/([^\\])\n/g, "$1\\n")
@@ -20,23 +18,32 @@ function extractJsonArray(text) {
   if (!text) return [];
   let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
-  // slice between first [ and last ]
+  try {
+    const parsed = JSON.parse(cleaned);
+    if (Array.isArray(parsed)) return parsed;
+  } catch (_) {}
+
   const firstIdx = cleaned.indexOf("[");
   const lastIdx = cleaned.lastIndexOf("]");
   if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
-    cleaned = cleaned.slice(firstIdx, lastIdx + 1);
-  }
-
-  try {
-    return JSON.parse(cleaned);
-  } catch {
+    let jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
     try {
-      return JSON.parse(healJsonString(cleaned));
-    } catch (err2) {
-      console.error("❌ Healed parse failed:", err2.message);
-      return [];
+      const parsed = JSON.parse(jsonSub);
+      if (Array.isArray(parsed)) return parsed;
+    } catch (err) {
+      try {
+        const healed = healJsonString(jsonSub);
+        const parsed = JSON.parse(healed);
+        if (Array.isArray(parsed)) {
+          console.log("💊 Healed JSON parse succeeded");
+          return parsed;
+        }
+      } catch (err2) {
+        console.error("❌ Healed parse failed:", err2.message);
+      }
     }
   }
+  return [];
 }
 
 /** ---------- Fuzzy Similarity (Levenshtein) ---------- */
@@ -57,7 +64,8 @@ function levenshtein(a, b) {
       );
     }
   }
-  return 1 - matrix[a.length][b.length] / Math.max(a.length, b.length);
+  const distance = matrix[a.length][b.length];
+  return 1 - distance / Math.max(a.length, b.length);
 }
 
 /** ---------- DB Duplicate Check ---------- */
@@ -85,13 +93,60 @@ function generatePlaceholderScaffold(lang) {
   return "// TODO: implement scaffold";
 }
 
+/** ---------- Validator & Normalizer ---------- */
+function isValidQuestion(q, languages) {
+  return (
+    q &&
+    q.title &&
+    q.description &&
+    q.sampleInput &&
+    q.sampleOutput &&
+    Array.isArray(q.testCases) &&
+    q.testCases.length >= 5 &&
+    Array.isArray(q.scaffolds) &&
+    q.scaffolds.length === languages.length &&
+    q.scaffolds.every((s) => s.body && s.body.includes("solve"))
+  );
+}
+
+function normalizeQuestion(q, languages) {
+  return {
+    title: q?.title || "Untitled Question",
+    description: q?.description || "No description provided.",
+    difficulty: q?.difficulty || "Easy",
+    tags: Array.isArray(q?.tags) ? q.tags : [],
+    testCases:
+      Array.isArray(q?.testCases) && q.testCases.length >= 5
+        ? q.testCases
+        : [
+            { input: "1", output: "1", score: 1, explanation: "Placeholder", visible: true },
+            { input: "2", output: "2", score: 1, explanation: "Placeholder", visible: false },
+            { input: "3", output: "3", score: 1, explanation: "Placeholder", visible: false },
+            { input: "4", output: "4", score: 1, explanation: "Placeholder", visible: false },
+            { input: "5", output: "5", score: 1, explanation: "Placeholder", visible: true },
+          ],
+    sampleInput: q?.sampleInput || (q?.testCases?.[0]?.input ?? "1"),
+    sampleOutput: q?.sampleOutput || (q?.testCases?.[0]?.output ?? "1"),
+    scaffolds: (languages || []).map((lang) => {
+      const existing = (q?.scaffolds || []).find((s) => s.languageName === lang.languageName);
+      return (
+        existing || {
+          languageId: lang.languageId,
+          languageName: lang.languageName,
+          body: generatePlaceholderScaffold(lang.languageName),
+        }
+      );
+    }),
+  };
+}
+
 /** ---------- Prompt Builder ---------- */
 function buildPrompt({ jobDescription, seniorityLevels, experienceRange, distribution, languages }) {
   return `
 You are an expert coding interview question generator. Generate exactly:
-- ${distribution.Easy} Easy
-- ${distribution.Medium} Medium
-- ${distribution.Hard} Hard
+- ${distribution.Easy} Easy questions
+- ${distribution.Medium} Medium questions
+- ${distribution.Hard} Hard questions
 
 Job Description: ${jobDescription}
 Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
@@ -101,27 +156,26 @@ Languages required: ${(languages || []).map((l) => l.languageName || l).join(", 
 Schema (strict, all fields required):
 {
   "title": "string (unique, no random IDs)",
-  "description": "string (detailed problem statement)",
+  "description": "string",
   "difficulty": "Easy | Medium | Hard",
   "tags": ["string"],
-  "sampleInput": "string (must map to a testCase)",
-  "sampleOutput": "string (must map to a testCase)",
+  "sampleInput": "string",
+  "sampleOutput": "string",
   "testCases": [
     { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
   ],
   "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code with driver + solve method and I/O parsing" }
+    { "languageId": number, "languageName": "string", "body": "starter code (driver + solve method with I/O)" }
   ]
 }
 
 Rules:
-- ≥5 test cases (normal, edge, boundary). At least 2 visible.
-- sampleInput/sampleOutput must always map to a testCase.
-- Difficulty split must match distribution exactly.
-- Scaffold required for ALL selected languages with driver + I/O (not placeholders).
-- Titles must be descriptive but not random IDs.
+- ≥5 test cases, ≥2 visible.
+- sampleInput/sampleOutput must map to a testCase.
+- Scaffolds must exist for ALL selected languages with full I/O handling.
+- Titles must be descriptive but unique, no random tokens.
 
-Return only a valid JSON array, no commentary.
+Return only a valid JSON array of questions, no commentary.
 `;
 }
 
@@ -133,11 +187,12 @@ async function callAI(primaryModel, prompt) {
   async function callOpenAI() {
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
-      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.7 },
+      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.8 },
       { headers: { Authorization: `Bearer ${openaiKey}` } }
     );
     return res.data.choices[0].message.content;
   }
+
   async function callGemini() {
     const res = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
@@ -156,41 +211,27 @@ async function callAI(primaryModel, prompt) {
   }
 }
 
-/** ---------- Deduplication + Validation ---------- */
+/** ---------- Retry + Normalization ---------- */
 async function ensureValid(question, model, basePrompt, languages, seenCache = []) {
-  let attempts = 0;
-  while (attempts < 3) {
+  for (let attempt = 0; attempt < 3; attempt++) {
     const inBatchDup = seenCache.some(
       (q) => levenshtein(q.title, question.title) > 0.85 || levenshtein(q.description, question.description) > 0.85
     );
     const dbDup = await isDuplicate(question);
 
-    const hasScaffolds =
-      question.scaffolds &&
-      question.scaffolds.length === languages.length &&
-      question.scaffolds.every((s) => s.body && s.body.includes("solve"));
+    if (!inBatchDup && !dbDup && isValidQuestion(question, languages)) {
+      return question;
+    }
 
-    const hasTests = question.testCases && question.testCases.length >= 5;
-    const hasSample = question.sampleInput && question.sampleOutput;
-
-    if (!inBatchDup && !dbDup && hasScaffolds && hasTests && hasSample) return question;
-
-    attempts++;
-    console.warn(`⚠️ Validation failed, regenerating (attempt ${attempts})...`);
-
-    const regenPrompt = basePrompt + `\n\nImportant: Fix missing schema parts (tests, scaffolds with I/O). JSON only.`;
-    let aiResponse = await callAI(model, regenPrompt);
-    const [regenQ] = extractJsonArray(aiResponse);
-    question = regenQ || question;
+    console.warn(`⚠️ Validation failed, regenerating (attempt ${attempt + 1})...`);
+    const retryPrompt = basePrompt + "\n\n⚠️ IMPORTANT: Fix schema, regenerate with ALL required fields, no omissions.";
+    let aiResponse = await callAI(model, retryPrompt);
+    const [retryQ] = extractJsonArray(aiResponse);
+    question = retryQ || question;
   }
 
-  // fallback scaffolds if AI fails
-  const scaffolds = (languages || []).map((lang) => ({
-    languageId: lang.languageId,
-    languageName: lang.languageName,
-    body: generatePlaceholderScaffold(lang.languageName),
-  }));
-  return { ...question, scaffolds };
+  console.warn("⚠️ AI failed after retries, applying normalization fallback.");
+  return normalizeQuestion(question, languages);
 }
 
 /** ---------- Generate Questions ---------- */
@@ -210,16 +251,16 @@ router.post("/generate-questions", async (req, res) => {
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
-    // enforce distribution
     const grouped = { Easy: [], Medium: [], Hard: [] };
-    for (const q of questions) if (grouped[q.difficulty]) grouped[q.difficulty].push(q);
+    for (const q of questions) {
+      if (grouped[q.difficulty]) grouped[q.difficulty].push(q);
+    }
     const selected = [
       ...grouped.Easy.slice(0, distribution.Easy),
       ...grouped.Medium.slice(0, distribution.Medium),
       ...grouped.Hard.slice(0, distribution.Hard),
     ];
 
-    // distribute totalTime exactly
     const baseTime = Math.floor(totalTime / numQuestions);
     const extra = totalTime - baseTime * numQuestions;
 
@@ -227,6 +268,7 @@ router.post("/generate-questions", async (req, res) => {
     for (let idx = 0; idx < selected.length; idx++) {
       let q = selected[idx];
       const uq = await ensureValid(q, model, prompt, languages, uniqueQuestions);
+
       uniqueQuestions.push({
         ...uq,
         timeAllowed: baseTime + (idx < extra ? 1 : 0),
@@ -244,13 +286,20 @@ router.post("/regenerate-question", async (req, res) => {
   const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages, timeAllowed } = req.body;
 
   try {
-    const prompt = buildPrompt({
-      jobDescription,
-      seniorityLevels,
-      experienceRange,
-      distribution: { Easy: difficulty === "Easy" ? 1 : 0, Medium: difficulty === "Medium" ? 1 : 0, Hard: difficulty === "Hard" ? 1 : 0 },
-      languages,
-    });
+    const prompt = `
+Generate exactly 1 **new unique ${difficulty}** coding question.
+
+Job Description: ${jobDescription}
+Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") : seniorityLevels}
+Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
+Languages: ${languages.map((l) => l.languageName || l).join(", ")}
+
+Rules:
+- Must follow full schema (title, desc, tags, sample, testCases ≥5, scaffolds).
+- sampleInput/sampleOutput must map to a testCase.
+- Scaffolds required for ALL selected languages, with driver + solve method + I/O.
+- Must not duplicate any previous question.
+`;
 
     let aiResponse = await callAI(model, prompt);
     let [question] = extractJsonArray(aiResponse);
@@ -273,7 +322,7 @@ router.post("/save-questions", async (req, res) => {
       const question = new Question({ ...questionData, draft: !!draft });
       await question.save();
 
-      if (scaffolds?.length > 0) {
+      if (scaffolds && scaffolds.length > 0) {
         const scaffoldDocs = scaffolds.map((s) => ({ ...s, questionId: question._id }));
         await Scaffold.insertMany(scaffoldDocs);
       }
