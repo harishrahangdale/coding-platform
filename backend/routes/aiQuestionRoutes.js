@@ -44,6 +44,24 @@ Return valid JSON array only.
 }
 
 /**
+ * Sanitize AI responses (remove ```json fences + extract first valid JSON array)
+ */
+function sanitizeAIResponse(raw) {
+  if (!raw) return raw;
+
+  // Remove markdown fences
+  let cleaned = raw.replace(/```json|```/g, "").trim();
+
+  // Try extracting the first JSON array using regex
+  const match = cleaned.match(/\[[\s\S]*\]/);
+  if (match) {
+    return match[0]; // first valid array
+  }
+
+  return cleaned;
+}
+
+/**
  * Low-level API calls
  */
 async function callOpenAI(prompt) {
@@ -154,6 +172,9 @@ router.post("/generate-questions", async (req, res) => {
 
     let aiResponse = await callAI(model, prompt);
 
+    // Sanitize Gemini/OpenAI fenced responses
+    aiResponse = sanitizeAIResponse(aiResponse);
+
     let questions = [];
     try {
       questions = JSON.parse(aiResponse);
@@ -197,6 +218,8 @@ Return JSON array with 1 object only.
 `;
 
     let aiResponse = await callAI(model, prompt);
+    aiResponse = sanitizeAIResponse(aiResponse);
+
     let [question] = JSON.parse(aiResponse);
     res.json({ question });
   } catch (err) {
