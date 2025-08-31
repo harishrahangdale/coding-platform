@@ -17,34 +17,24 @@ function healJsonString(str) {
 function extractJsonArray(text) {
   if (!text) return [];
   let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
-
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
   } catch (_) {}
-
   const firstIdx = cleaned.indexOf("[");
   const lastIdx = cleaned.lastIndexOf("]");
-  if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
+  if (firstIdx !== -1 && lastIdx > firstIdx) {
     let jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
     try {
-      const parsed = JSON.parse(jsonSub);
-      if (Array.isArray(parsed)) return parsed;
+      return JSON.parse(jsonSub);
     } catch (err) {
-      console.warn("⚠️ extractJsonArray fallback parse failed:", err.message);
       try {
-        const healed = healJsonString(jsonSub);
-        const parsed = JSON.parse(healed);
-        if (Array.isArray(parsed)) {
-          console.log("💊 Healed JSON parse succeeded");
-          return parsed;
-        }
+        return JSON.parse(healJsonString(jsonSub));
       } catch (err2) {
-        console.error("❌ Healed parse failed:", err2.message);
+        console.error("❌ extractJsonArray failed:", err2.message);
       }
     }
   }
-  console.error("❌ extractJsonArray failed, raw snippet:", text.slice(0, 300));
   return [];
 }
 
@@ -54,10 +44,8 @@ function levenshtein(a, b) {
   const matrix = Array.from({ length: a.length + 1 }, () =>
     Array(b.length + 1).fill(0)
   );
-
   for (let i = 0; i <= a.length; i++) matrix[i][0] = i;
   for (let j = 0; j <= b.length; j++) matrix[0][j] = j;
-
   for (let i = 1; i <= a.length; i++) {
     for (let j = 1; j <= b.length; j++) {
       const cost = a[i - 1] === b[j - 1] ? 0 : 1;
@@ -68,7 +56,6 @@ function levenshtein(a, b) {
       );
     }
   }
-
   const distance = matrix[a.length][b.length];
   return 1 - distance / Math.max(a.length, b.length);
 }
@@ -79,16 +66,23 @@ async function isDuplicate(question) {
   for (const ex of existing) {
     const titleSim = levenshtein(question.title, ex.title);
     const descSim = levenshtein(question.description, ex.description);
-    if (titleSim > 0.85 || descSim > 0.85) {
-      console.warn(
-        `⚠️ Fuzzy DB duplicate found (titleSim=${titleSim.toFixed(
-          2
-        )}, descSim=${descSim.toFixed(2)})`
-      );
-      return true;
-    }
+    if (titleSim > 0.85 || descSim > 0.85) return true;
   }
   return false;
+}
+
+/** ---------- Default Scaffold Generator ---------- */
+function defaultScaffold(languageId, languageName) {
+  if (languageName.toLowerCase().includes("java")) {
+    return `import java.util.*;\npublic class Main {\n  static void solve() {\n    // TODO: implement\n  }\n  public static void main(String[] args) {\n    Scanner sc = new Scanner(System.in);\n    // TODO: parse input and call solve()\n  }\n}`;
+  }
+  if (languageName.toLowerCase().includes("python")) {
+    return `def solve():\n    # TODO: implement\n    pass\n\nif __name__ == "__main__":\n    solve()`;
+  }
+  if (languageName.toLowerCase().includes("c++")) {
+    return `#include <bits/stdc++.h>\nusing namespace std;\n\nvoid solve() {\n    // TODO: implement\n}\n\nint main() {\n    ios::sync_with_stdio(false);\n    cin.tie(nullptr);\n    solve();\n    return 0;\n}`;
+  }
+  return "// TODO: implement";
 }
 
 /** ---------- Prompt Builder ---------- */
@@ -101,7 +95,7 @@ function buildPrompt({
   languages,
 }) {
   return `
-You are an expert coding interview question generator. Based on the job description and requirements below, generate ${numQuestions} **unique** coding questions.
+You are an expert coding interview question generator. Generate ${numQuestions} **unique and complete** coding questions.
 
 Job Description: ${jobDescription}
 Seniority Levels: ${
@@ -114,51 +108,41 @@ Difficulty Distribution:
 - Medium: ${distribution.Medium}
 - Hard: ${distribution.Hard}
 
-Languages required (only these, nothing else): ${(languages || [])
+Languages required (ONLY these): ${(languages || [])
     .map((l) => l.languageName || l)
     .join(", ")}
 
-Rules for each generated question:
-- Must strictly follow this schema:
+Schema (must include ALL fields, no omissions):
 {
-  "title": "string (must be unique)",
+  "title": "string (unique)",
   "description": "string (detailed problem statement)",
   "difficulty": "Easy | Medium | Hard",
   "tags": ["string"],
-  "sampleInput": "string (must correspond to a test case)",
-  "sampleOutput": "string (must correspond to a test case)",
+  "sampleInput": "string (must map to a test case)",
+  "sampleOutput": "string (must map to a test case)",
   "testCases": [
     { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
   ],
   "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code (non-empty)" }
+    { "languageId": number, "languageName": "string", "body": "starter code with driver + TODO method" }
   ]
 }
 
-Test Case Guidelines:
-- Always provide at least 5 test cases (normal, edge, boundary cases).
-- At least 2 test cases must be visible.
-- Each test case must have an explanation.
-- sampleInput/sampleOutput must never be empty or "N/A".
+Rules:
+- At least 5 test cases (cover normal, edge, boundary). ≥2 visible.
+- sampleInput/sampleOutput must match one of the test cases (never blank/N/A).
+- Generate scaffolds ONLY for the selected languages.
+- Each scaffold must include:
+  - Judge0-safe imports/wrappers.
+  - A single TODO method.
+  - Driver parsing stdin/stdout.
+- Java: public class Main + static method.
+- Python: def solve().
+- C++: #include <bits/stdc++.h> + int main().
 
-Scaffold Guidelines:
-- Generate scaffolds ONLY for the selected languages above.
-- Scaffold must include:
-  - A single public method (or function) named according to the problem context.
-  - The method should only contain a TODO comment.
-  - A main()/driver block that handles stdin/stdout in HackerRank/HackerEarth style.
-  - Driver must parse input and call the method, then print the result.
-- Always include imports/wrappers Judge0 expects:
-  - Java: public class Main { ... }
-  - Python: def solve(...)
-  - C++: #include <bits/stdc++.h>
+Add randomness, avoid duplicates. Append hidden uniqueness token: ${Date.now()}.
 
-Additional:
-- Every generated question must be unique in title and description.
-- Add randomness so repeated inputs don’t produce the same output.
-- Append hidden uniqueness token: ${Date.now()}.
-
-Return only a valid JSON array of questions, no commentary.
+Return only a **valid JSON array** of questions, no commentary.
 `;
 }
 
@@ -166,46 +150,25 @@ Return only a valid JSON array of questions, no commentary.
 async function callAI(primaryModel, prompt) {
   const openaiKey = process.env.OPENAI_API_KEY;
   const geminiKey = process.env.GEMINI_API_KEY;
-  console.log("📡 callAI invoked:", {
-    model: primaryModel,
-    openaiKey: !!openaiKey,
-    geminiKey: !!geminiKey,
-  });
-
   async function callOpenAI() {
-    console.log("⚡ Calling OpenAI GPT...");
     const res = await axios.post(
       "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.9,
-      },
+      { model: "gpt-4o-mini", messages: [{ role: "user", content: prompt }], temperature: 0.9 },
       { headers: { Authorization: `Bearer ${openaiKey}` } }
     );
     return res.data.choices[0].message.content;
   }
-
   async function callGemini() {
-    console.log("⚡ Calling Gemini 2.0 Flash...");
     const res = await axios.post(
       "https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent",
       { contents: [{ parts: [{ text: prompt }] }] },
-      {
-        headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey },
-      }
+      { headers: { "Content-Type": "application/json", "X-goog-api-key": geminiKey } }
     );
     return res.data.candidates?.[0]?.content?.parts?.[0]?.text || "";
   }
-
   try {
     return primaryModel === "openai" ? await callOpenAI() : await callGemini();
   } catch (err) {
-    console.error(
-      `❌ ${primaryModel} primary call failed:`,
-      err.response?.data || err.message
-    );
-    console.log("🔄 Falling back...");
     if (primaryModel === "openai" && geminiKey) return callGemini();
     if (primaryModel === "gemini" && openaiKey) return callOpenAI();
     throw err;
@@ -222,32 +185,11 @@ async function ensureUnique(question, model, basePrompt, seenCache = []) {
         levenshtein(q.description, question.description) > 0.85
     );
     const dbDup = await isDuplicate(question);
-
-    const scaffoldMissing =
-      !question.scaffolds ||
-      question.scaffolds.length === 0 ||
-      question.scaffolds.some((s) => !s.body || s.body.trim() === "");
-
-    const sampleInvalid =
-      !question.sampleInput ||
-      !question.sampleOutput ||
-      question.sampleInput === "N/A" ||
-      question.sampleOutput === "N/A";
-
-    if (!inBatchDup && !dbDup && !scaffoldMissing && !sampleInvalid) {
-      return question;
-    }
-
-    console.warn(
-      `⚠️ Issue detected (dup=${inBatchDup || dbDup}, scaffoldMissing=${scaffoldMissing}, sampleInvalid=${sampleInvalid}), regenerating... attempt ${
-        attempts + 1
-      }`
-    );
+    if (!inBatchDup && !dbDup) return question;
     attempts++;
-
     const regenPrompt =
       basePrompt +
-      `\n\nImportant: Avoid these titles/descriptions:\n- ${question.title}\n- ${question.description}\nEnsure scaffolds and sample I/O are always non-empty.`;
+      `\n\nImportant: avoid duplicates. Do NOT reuse:\n- ${question.title}\n- ${question.description}\n`;
     let aiResponse = await callAI(model, regenPrompt);
     const [regenQ] = extractJsonArray(aiResponse);
     question = regenQ || question;
@@ -257,105 +199,60 @@ async function ensureUnique(question, model, basePrompt, seenCache = []) {
 
 /** ---------- Generate Questions ---------- */
 router.post("/generate-questions", async (req, res) => {
-  const {
-    jobDescription,
-    seniorityLevels,
-    experienceRange,
-    numQuestions,
-    totalTime,
-    model,
-    languages,
-    distributionOverride,
-  } = req.body;
-
+  const { jobDescription, seniorityLevels, experienceRange, numQuestions, totalTime, model, languages } = req.body;
   try {
-    let distribution = distributionOverride;
-    if (!distributionOverride) {
-      let easy = Math.floor(numQuestions * 0.3);
-      let medium = Math.floor(numQuestions * 0.5);
-      let hard = numQuestions - (easy + medium);
-      if (easy + medium + hard !== numQuestions) {
-        hard = numQuestions - (easy + medium);
-      }
-      distribution = { Easy: easy, Medium: medium, Hard: hard };
-    }
-    console.log("📊 Final distribution:", distribution);
+    let easy = Math.floor(numQuestions * 0.3);
+    let medium = Math.floor(numQuestions * 0.5);
+    let hard = numQuestions - (easy + medium);
+    const distribution = { Easy: easy, Medium: medium, Hard: hard };
 
-    const prompt = buildPrompt({
-      jobDescription,
-      seniorityLevels,
-      experienceRange,
-      numQuestions,
-      distribution,
-      languages,
-    });
-    console.log("📝 Prompt built, length:", prompt.length);
-
+    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions, distribution, languages });
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
-    // Deduplicate + fix invalid scaffolds or sample I/O
     const uniqueQuestions = [];
     for (const q of questions) {
-      const uq = await ensureUnique(q, model, prompt, uniqueQuestions);
-      uniqueQuestions.push({
-        ...uq,
-        timeAllowed: Math.floor(totalTime / numQuestions) || 15,
+      let uq = await ensureUnique(q, model, prompt, uniqueQuestions);
+      // Ensure scaffolds exist for all selected languages
+      const requiredLangs = languages.map(l => l.languageName);
+      const scaffolded = requiredLangs.map(langName => {
+        let existing = uq.scaffolds?.find(s => s.languageName === langName);
+        if (!existing || !existing.body?.trim()) {
+          const langObj = languages.find(l => l.languageName === langName);
+          return { languageId: langObj.languageId, languageName: langObj.languageName, body: defaultScaffold(langObj.languageId, langObj.languageName) };
+        }
+        return existing;
       });
+      uq = { ...uq, scaffolds: scaffolded, timeAllowed: Math.floor(totalTime / numQuestions) || 15 };
+      uniqueQuestions.push(uq);
     }
-
     res.json({ questions: uniqueQuestions, distribution });
   } catch (err) {
-    console.error("AI generation error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to generate questions" });
   }
 });
 
 /** ---------- Regenerate Question ---------- */
 router.post("/regenerate-question", async (req, res) => {
-  const {
-    jobDescription,
-    seniorityLevels,
-    experienceRange,
-    difficulty,
-    model,
-    languages,
-  } = req.body;
-
+  const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages } = req.body;
   try {
-    const prompt = `
-Generate 1 **new unique** ${difficulty} coding question:
-
-Job Description: ${jobDescription}
-Seniority Levels: ${
-      Array.isArray(seniorityLevels)
-        ? seniorityLevels.join(", ")
-        : seniorityLevels
-    }
-Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
-Languages (only these): ${languages.map((l) => l.languageName || l).join(", ")}
-
-Rules:
-- Must strictly follow schema as before.
-- Must include at least 5 test cases (normal, edge, boundary cases).
-- At least 2 test cases must be visible.
-- sampleInput/sampleOutput must map to a test case (never N/A).
-- Scaffold must contain driver + single method with TODO.
-- Include Judge0 imports/wrappers (Java Main, Python solve(), C++ main()).
-- Must not repeat previous titles/descriptions.
-- Append hidden uniqueness token: ${Date.now()}.
-
-Return a JSON array with exactly 1 question object.
-`;
-
+    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, numQuestions: 1, distribution: { [difficulty]: 1 }, languages });
     let aiResponse = await callAI(model, prompt);
     let [question] = extractJsonArray(aiResponse);
-
     question = await ensureUnique(question, model, prompt);
-
+    // Ensure scaffolds for all selected languages
+    const requiredLangs = languages.map(l => l.languageName);
+    const scaffolded = requiredLangs.map(langName => {
+      let existing = question.scaffolds?.find(s => s.languageName === langName);
+      if (!existing || !existing.body?.trim()) {
+        const langObj = languages.find(l => l.languageName === langName);
+        return { languageId: langObj.languageId, languageName: langObj.languageName, body: defaultScaffold(langObj.languageId, langObj.languageName) };
+      }
+      return existing;
+    });
+    question = { ...question, scaffolds: scaffolded };
     res.json({ question });
   } catch (err) {
-    console.error("Regenerate error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to regenerate question" });
   }
 });
@@ -365,21 +262,18 @@ router.post("/save-questions", async (req, res) => {
   try {
     const { questions, draft } = req.body;
     let savedQuestions = [];
-
     for (const q of questions) {
       const { scaffolds, ...questionData } = q;
       const question = new Question({ ...questionData, draft: !!draft });
       await question.save();
-
-      if (scaffolds && scaffolds.length > 0) {
-        const scaffoldDocs = scaffolds.map((s) => ({ ...s, questionId: question._id }));
+      if (scaffolds?.length > 0) {
+        const scaffoldDocs = scaffolds.map(s => ({ ...s, questionId: question._id }));
         await Scaffold.insertMany(scaffoldDocs);
       }
       savedQuestions.push(question);
     }
     res.json(savedQuestions);
   } catch (err) {
-    console.error("DB save error:", err);
     res.status(500).json({ error: "Failed to save questions with scaffolds" });
   }
 });
