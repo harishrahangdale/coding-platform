@@ -47,26 +47,42 @@ Return valid JSON array only.
  * Call AI model
  */
 async function callAI(model, prompt) {
+  console.log("📡 callAI invoked:", { model, keyPresent: !!process.env.OPENAI_API_KEY });
+
   if (model === "openai") {
-    const res = await axios.post(
-      "https://api.openai.com/v1/chat/completions",
-      {
-        model: "gpt-4o-mini",
-        messages: [{ role: "user", content: prompt }],
-        temperature: 0.7,
-      },
-      {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` },
-      }
-    );
-    return res.data.choices[0].message.content;
+    try {
+      const res = await axios.post(
+        "https://api.openai.com/v1/chat/completions",
+        {
+          model: "gpt-4o-mini",
+          messages: [{ role: "user", content: prompt }],
+          temperature: 0.7,
+        },
+        {
+          headers: {
+            Authorization: `Bearer ${process.env.OPENAI_API_KEY}`,
+          },
+        }
+      );
+      console.log("✅ OpenAI response received");
+      return res.data.choices[0].message.content;
+    } catch (err) {
+      console.error("❌ OpenAI API error:", err.response?.status, err.response?.data || err.message);
+      throw err;
+    }
   } else if (model === "gemini") {
-    const res = await axios.post(
-      "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
-      { contents: [{ parts: [{ text: prompt }] }] },
-      { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}` } }
-    );
-    return res.data.candidates[0].content.parts[0].text;
+    try {
+      const res = await axios.post(
+        "https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent",
+        { contents: [{ parts: [{ text: prompt }] }] },
+        { headers: { Authorization: `Bearer ${process.env.GEMINI_API_KEY}` } }
+      );
+      console.log("✅ Gemini response received");
+      return res.data.candidates[0].content.parts[0].text;
+    } catch (err) {
+      console.error("❌ Gemini API error:", err.response?.status, err.response?.data || err.message);
+      throw err;
+    }
   }
   throw new Error("Invalid model");
 }
@@ -74,6 +90,18 @@ async function callAI(model, prompt) {
 // ---------- Generate Questions ----------
 router.post("/generate-questions", async (req, res) => {
   const { jobDescription, seniorityLevel, experienceYears, numQuestions, totalTime, model, languages, distributionOverride } = req.body;
+
+  console.log("📥 Incoming /generate-questions request:", {
+    jobDescription: jobDescription?.slice(0, 50) + "...",
+    seniorityLevel,
+    experienceYears,
+    numQuestions,
+    totalTime,
+    model,
+    languages: languages?.map(l => l.languageName),
+    keyPresent: !!process.env.OPENAI_API_KEY,
+    keyPrefix: process.env.OPENAI_API_KEY ? process.env.OPENAI_API_KEY.slice(0, 8) : null
+  });
 
   try {
     // Difficulty distribution
@@ -86,7 +114,11 @@ router.post("/generate-questions", async (req, res) => {
 
     const prompt = buildPrompt({ jobDescription, seniorityLevel, experienceYears, numQuestions, distribution, languages });
 
+    console.log("📝 Prompt built, length:", prompt.length);
+
     let aiResponse = await callAI(model, prompt);
+
+    console.log("📦 Raw AI response (first 200 chars):", aiResponse.slice(0, 200));
 
     let questions = JSON.parse(aiResponse);
 
@@ -96,16 +128,24 @@ router.post("/generate-questions", async (req, res) => {
       timeAllowed: perQuestionTime || 15,
     }));
 
+    console.log("✅ Parsed questions:", questions.length);
+
     res.json({ questions, distribution });
   } catch (err) {
     console.error("AI generation error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to generate questions", details: err.response?.data || err.message });
+    res.status(500).json({
+      error: "Failed to generate questions",
+      details: err.response?.data || err.message,
+      keyPresent: !!process.env.OPENAI_API_KEY,
+    });
   }
 });
 
 // ---------- Regenerate Single Question ----------
 router.post("/regenerate-question", async (req, res) => {
   const { jobDescription, seniorityLevel, experienceYears, difficulty, model, languages } = req.body;
+  console.log("♻️ Regenerate request:", { difficulty, seniorityLevel, experienceYears, model });
+
   try {
     const prompt = `
 Generate 1 unique ${difficulty} coding question for:
@@ -118,11 +158,16 @@ Return JSON array with 1 object only.
 `;
 
     let aiResponse = await callAI(model, prompt);
+    console.log("📦 Raw regenerate response (first 200 chars):", aiResponse.slice(0, 200));
+
     let [question] = JSON.parse(aiResponse);
     res.json({ question });
   } catch (err) {
     console.error("AI regenerate error:", err.response?.data || err.message);
-    res.status(500).json({ error: "Failed to regenerate question", details: err.response?.data || err.message });
+    res.status(500).json({
+      error: "Failed to regenerate question",
+      details: err.response?.data || err.message,
+    });
   }
 });
 
@@ -130,6 +175,8 @@ Return JSON array with 1 object only.
 router.post("/save-questions", async (req, res) => {
   try {
     const { questions, draft } = req.body;
+    console.log("💾 Saving questions:", questions?.length, "draft?", draft);
+
     let savedQuestions = [];
 
     for (const q of questions) {
@@ -149,6 +196,7 @@ router.post("/save-questions", async (req, res) => {
       savedQuestions.push(question);
     }
 
+    console.log("✅ Saved questions:", savedQuestions.length);
     res.json(savedQuestions);
   } catch (err) {
     console.error("DB save error:", err);
