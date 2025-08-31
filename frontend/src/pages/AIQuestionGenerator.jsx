@@ -178,155 +178,185 @@ export default function AIQuestionGenerator() {
       )}
 
       {/* Step 2 */}
-      {step === 2 && (
-        <div className="p-6 bg-white rounded shadow space-y-6">
-          {/* Seniority (multiple) */}
-          <div>
-            <label className="block text-sm font-medium mb-2">Seniority Levels</label>
-            <div className="flex gap-4">
-              {availableSeniorities.map((level) => (
-                <label key={level} className="flex items-center gap-1">
-                  <input
+        {step === 2 && (
+        <div className="p-6 bg-white rounded-xl shadow space-y-8">
+            {/* Seniority (multiple) */}
+            <div>
+            <label className="block text-sm font-semibold mb-3">Seniority Levels</label>
+            <div className="flex gap-4 flex-wrap">
+                {availableSeniorities.map((level) => (
+                <label
+                    key={level}
+                    className="flex items-center gap-2 px-3 py-1 border rounded-full cursor-pointer hover:bg-gray-50"
+                >
+                    <input
                     type="checkbox"
                     checked={formData.seniorityLevels.includes(level)}
                     onChange={() => toggleSeniority(level)}
-                  />
-                  {level}
+                    className="accent-indigo-600"
+                    />
+                    <span>{level}</span>
                 </label>
-              ))}
+                ))}
             </div>
-          </div>
+            </div>
 
-          {/* Experience Range */}
-          <div className="grid grid-cols-2 gap-4">
+            {/* Experience Range */}
             <div>
-              <label className="block text-sm font-medium mb-1">Experience Min (years)</label>
-              <input
+            <label className="block text-sm font-semibold mb-3">Experience Range (years)</label>
+            <div className="grid grid-cols-2 gap-4">
+                <input
                 type="number"
                 name="experienceMin"
+                placeholder="Min"
                 value={formData.experienceMin}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium mb-1">Experience Max (years)</label>
-              <input
+                />
+                <input
                 type="number"
                 name="experienceMax"
+                placeholder="Max"
                 value={formData.experienceMax}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
-              />
+                />
             </div>
-          </div>
+            </div>
 
-          {/* Questions & Time */}
-          <div className="grid grid-cols-2 gap-4">
+            {/* Questions & Time */}
+            <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">Number of Questions</label>
-              <input
+                <label className="block text-sm font-semibold mb-1">Number of Questions</label>
+                <input
                 type="number"
                 name="numQuestions"
                 value={formData.numQuestions}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
-              />
+                />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">Total Time (minutes)</label>
-              <input
+                <label className="block text-sm font-semibold mb-1">Total Time (minutes)</label>
+                <input
                 type="number"
                 name="totalTime"
                 value={formData.totalTime}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
-              />
-            </div>
-          </div>
-
-          {/* Difficulty */}
-          <div>
-            <label className="block text-sm font-medium mb-2">Difficulty Distribution (%)</label>
-            {["Easy", "Medium", "Hard"].map((d) => (
-              <div key={d} className="flex items-center gap-2 my-1">
-                <label className="w-20">{d}</label>
-                <input
-                  type="number"
-                  value={formData.distribution[d]}
-                  onChange={(e) =>
-                    setFormData({
-                      ...formData,
-                      distribution: {
-                        ...formData.distribution,
-                        [d]: parseInt(e.target.value),
-                      },
-                    })
-                  }
-                  className="border p-1 w-20 rounded"
                 />
-              </div>
-            ))}
-          </div>
+            </div>
+            </div>
 
-          {/* Languages */}
-          <div className="border p-3 rounded">
-            <label className="block text-sm font-medium mb-2">Allowed Languages</label>
-            <div className="flex gap-2 flex-wrap mt-2">
-              {availableLanguages.map((lang) => (
-                <label key={lang.languageId} className="flex items-center gap-1">
-                  <input
+            {/* Difficulty Distribution */}
+            <div>
+            <label className="block text-sm font-semibold mb-3">Difficulty Distribution (%)</label>
+            <div className="space-y-3">
+                {["Easy", "Medium", "Hard"].map((d) => (
+                <div key={d} className="flex items-center gap-4">
+                    <span className="w-20">{d}</span>
+                    <input
+                    type="number"
+                    min="0"
+                    max="100"
+                    value={formData.distribution[d]}
+                    onChange={(e) => {
+                        const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
+                        const updated = { ...formData.distribution, [d]: val };
+                        const total = updated.Easy + updated.Medium + updated.Hard;
+
+                        // Normalize back to 100 if needed
+                        if (total !== 100) {
+                        const factor = 100 / total;
+                        updated.Easy = Math.round(updated.Easy * factor);
+                        updated.Medium = Math.round(updated.Medium * factor);
+                        updated.Hard = 100 - (updated.Easy + updated.Medium); // fix rounding
+                        }
+
+                        setFormData({ ...formData, distribution: updated });
+                    }}
+                    className="border p-2 w-24 rounded"
+                    />
+                    <div className="flex-1 h-2 bg-gray-200 rounded overflow-hidden">
+                    <div
+                        className={`h-2 rounded ${
+                        d === "Easy"
+                            ? "bg-green-500"
+                            : d === "Medium"
+                            ? "bg-yellow-500"
+                            : "bg-red-500"
+                        }`}
+                        style={{ width: `${formData.distribution[d]}%` }}
+                    />
+                    </div>
+                    <span className="text-sm text-gray-600">{formData.distribution[d]}%</span>
+                </div>
+                ))}
+            </div>
+            </div>
+
+            {/* Languages */}
+            <div>
+            <label className="block text-sm font-semibold mb-3">Allowed Languages</label>
+            <div className="flex gap-3 flex-wrap">
+                {availableLanguages.map((lang) => (
+                <label
+                    key={lang.languageId}
+                    className="flex items-center gap-2 px-3 py-1 border rounded-full cursor-pointer hover:bg-gray-50"
+                >
+                    <input
                     type="checkbox"
                     checked={formData.languages.some((l) => l.languageId === lang.languageId)}
                     onChange={(e) => {
-                      if (e.target.checked) {
+                        if (e.target.checked) {
                         setFormData({ ...formData, languages: [...formData.languages, lang] });
-                      } else {
+                        } else {
                         setFormData({
-                          ...formData,
-                          languages: formData.languages.filter((l) => l.languageId !== lang.languageId),
+                            ...formData,
+                            languages: formData.languages.filter((l) => l.languageId !== lang.languageId),
                         });
-                      }
+                        }
                     }}
-                  />
-                  {lang.languageName}
+                    className="accent-indigo-600"
+                    />
+                    {lang.languageName}
                 </label>
-              ))}
+                ))}
             </div>
-          </div>
+            </div>
 
-          {/* Model */}
-          <div>
-            <label className="block text-sm font-medium mb-1">AI Model</label>
+            {/* Model */}
+            <div>
+            <label className="block text-sm font-semibold mb-1">AI Model</label>
             <select
-              name="model"
-              value={formData.model}
-              onChange={handleChange}
-              className="w-full border p-2 rounded"
+                name="model"
+                value={formData.model}
+                onChange={handleChange}
+                className="w-full border p-2 rounded"
             >
-              <option value="openai">OpenAI GPT</option>
-              <option value="gemini">Google Gemini</option>
+                <option value="openai">OpenAI GPT</option>
+                <option value="gemini">Google Gemini</option>
             </select>
-          </div>
+            </div>
 
-          {/* Buttons */}
-          <div className="flex gap-4">
+            {/* Buttons */}
+            <div className="flex gap-4 justify-end pt-4">
             <button
-              onClick={generateQuestions}
-              disabled={loading}
-              className="px-4 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                onClick={() => setStep(1)}
+                className="px-4 py-2 border rounded hover:bg-gray-100"
             >
-              {loading ? "Generating..." : "Generate Questions"}
+                ← Back
             </button>
             <button
-              onClick={() => setStep(1)}
-              className="px-4 py-2 border rounded hover:bg-gray-100"
+                onClick={generateQuestions}
+                disabled={loading}
+                className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700"
             >
-              ← Back
+                {loading ? "Generating..." : "Generate Questions"}
             </button>
-          </div>
+            </div>
         </div>
-      )}
+        )}
 
       {/* Step 3 */}
       {step === 3 && (
