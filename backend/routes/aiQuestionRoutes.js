@@ -194,17 +194,39 @@ async function ensureUnique(question, model, basePrompt, seenCache = []) {
   return question;
 }
 
-/** ---------- Generate Questions ---------- */
+// ---------- Generate Questions ----------
 router.post("/generate-questions", async (req, res) => {
-  const { jobDescription, seniorityLevels, experienceRange, numQuestions, totalTime, model, languages } = req.body;
+  const {
+    jobDescription,
+    seniorityLevels,
+    experienceRange,
+    numQuestions,
+    totalTime,
+    model,
+    languages,
+    distributionOverride,
+  } = req.body;
 
   try {
-    let easy = Math.floor(numQuestions * 0.3);
-    let medium = Math.floor(numQuestions * 0.5);
-    let hard = numQuestions - (easy + medium);
-    const distribution = { Easy: easy, Medium: medium, Hard: hard };
+    // ✅ Use client distribution if provided
+    let distribution = distributionOverride;
+    if (!distributionOverride) {
+      let easy = Math.floor(numQuestions * 0.3);
+      let medium = Math.floor(numQuestions * 0.5);
+      let hard = numQuestions - (easy + medium);
+      distribution = { Easy: easy, Medium: medium, Hard: hard };
+    }
 
-    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, distribution, languages });
+    console.log("📊 Final distribution:", distribution);
+
+    const prompt = buildPrompt({
+      jobDescription,
+      seniorityLevels,
+      experienceRange,
+      distribution,
+      languages,
+    });
+
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
@@ -223,14 +245,27 @@ router.post("/generate-questions", async (req, res) => {
     for (const q of selected) {
       const uq = await ensureUnique(q, model, prompt, uniqueQuestions);
       const scaffolds = (languages || []).map((lang) => {
-        const existing = (uq.scaffolds || []).find((s) => s.languageName === lang.languageName);
-        return existing || { languageId: lang.languageId, languageName: lang.languageName, body: generatePlaceholderScaffold(lang.languageName) };
+        const existing = (uq.scaffolds || []).find(
+          (s) => s.languageName === lang.languageName
+        );
+        return (
+          existing || {
+            languageId: lang.languageId,
+            languageName: lang.languageName,
+            body: generatePlaceholderScaffold(lang.languageName),
+          }
+        );
       });
-      uniqueQuestions.push({ ...uq, scaffolds, timeAllowed: Math.floor(totalTime / numQuestions) || 15 });
+      uniqueQuestions.push({
+        ...uq,
+        scaffolds,
+        timeAllowed: Math.floor(totalTime / numQuestions) || 15,
+      });
     }
 
     res.json({ questions: uniqueQuestions, distribution });
   } catch (err) {
+    console.error("AI generation error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to generate questions" });
   }
 });
