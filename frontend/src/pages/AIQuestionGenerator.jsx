@@ -179,44 +179,42 @@ export default function AIQuestionGenerator() {
 
       {/* Step 2 */}
         {step === 2 && (
-        <div className="p-6 bg-white rounded-xl shadow space-y-8">
+        <div className="p-6 bg-white rounded shadow space-y-6">
             {/* Seniority (multiple) */}
             <div>
-            <label className="block text-sm font-semibold mb-3">Seniority Levels</label>
+            <label className="block text-sm font-semibold mb-2">Seniority Levels</label>
             <div className="flex gap-4 flex-wrap">
                 {availableSeniorities.map((level) => (
-                <label
-                    key={level}
-                    className="flex items-center gap-2 px-3 py-1 border rounded-full cursor-pointer hover:bg-gray-50"
-                >
+                <label key={level} className="flex items-center gap-2">
                     <input
                     type="checkbox"
                     checked={formData.seniorityLevels.includes(level)}
                     onChange={() => toggleSeniority(level)}
-                    className="accent-indigo-600"
+                    className="h-4 w-4"
                     />
-                    <span>{level}</span>
+                    <span className="text-sm">{level}</span>
                 </label>
                 ))}
             </div>
             </div>
 
             {/* Experience Range */}
-            <div>
-            <label className="block text-sm font-semibold mb-3">Experience Range (years)</label>
             <div className="grid grid-cols-2 gap-4">
+            <div>
+                <label className="block text-sm font-medium mb-1">Experience Min (years)</label>
                 <input
                 type="number"
                 name="experienceMin"
-                placeholder="Min"
                 value={formData.experienceMin}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
                 />
+            </div>
+            <div>
+                <label className="block text-sm font-medium mb-1">Experience Max (years)</label>
                 <input
                 type="number"
                 name="experienceMax"
-                placeholder="Max"
                 value={formData.experienceMax}
                 onChange={handleChange}
                 className="w-full border p-2 rounded"
@@ -227,7 +225,7 @@ export default function AIQuestionGenerator() {
             {/* Questions & Time */}
             <div className="grid grid-cols-2 gap-4">
             <div>
-                <label className="block text-sm font-semibold mb-1">Number of Questions</label>
+                <label className="block text-sm font-medium mb-1">Number of Questions</label>
                 <input
                 type="number"
                 name="numQuestions"
@@ -237,7 +235,7 @@ export default function AIQuestionGenerator() {
                 />
             </div>
             <div>
-                <label className="block text-sm font-semibold mb-1">Total Time (minutes)</label>
+                <label className="block text-sm font-medium mb-1">Total Time (minutes)</label>
                 <input
                 type="number"
                 name="totalTime"
@@ -248,7 +246,7 @@ export default function AIQuestionGenerator() {
             </div>
             </div>
 
-            {/* Difficulty Distribution */}
+            {/* Difficulty */}
             <div>
             <label className="block text-sm font-semibold mb-3">Difficulty Distribution (%)</label>
             <div className="space-y-3">
@@ -262,18 +260,10 @@ export default function AIQuestionGenerator() {
                     value={formData.distribution[d]}
                     onChange={(e) => {
                         const val = Math.max(0, Math.min(100, parseInt(e.target.value) || 0));
-                        const updated = { ...formData.distribution, [d]: val };
-                        const total = updated.Easy + updated.Medium + updated.Hard;
-
-                        // Normalize back to 100 if needed
-                        if (total !== 100) {
-                        const factor = 100 / total;
-                        updated.Easy = Math.round(updated.Easy * factor);
-                        updated.Medium = Math.round(updated.Medium * factor);
-                        updated.Hard = 100 - (updated.Easy + updated.Medium); // fix rounding
-                        }
-
-                        setFormData({ ...formData, distribution: updated });
+                        setFormData({
+                        ...formData,
+                        distribution: { ...formData.distribution, [d]: val },
+                        });
                     }}
                     className="border p-2 w-24 rounded"
                     />
@@ -289,21 +279,32 @@ export default function AIQuestionGenerator() {
                         style={{ width: `${formData.distribution[d]}%` }}
                     />
                     </div>
-                    <span className="text-sm text-gray-600">{formData.distribution[d]}%</span>
+                    <span className="text-sm text-gray-600">
+                    {formData.distribution[d]}%
+                    </span>
                 </div>
                 ))}
             </div>
+            {/* Sum indicator */}
+            <p
+                className={`mt-2 text-sm font-medium ${
+                Object.values(formData.distribution).reduce((a, b) => a + b, 0) === 100
+                    ? "text-green-600"
+                    : "text-red-600"
+                }`}
+            >
+                Total: {Object.values(formData.distribution).reduce((a, b) => a + b, 0)}%
+                {Object.values(formData.distribution).reduce((a, b) => a + b, 0) !== 100 &&
+                " (must equal 100%)"}
+            </p>
             </div>
 
             {/* Languages */}
-            <div>
-            <label className="block text-sm font-semibold mb-3">Allowed Languages</label>
-            <div className="flex gap-3 flex-wrap">
+            <div className="border p-3 rounded">
+            <label className="block text-sm font-semibold mb-2">Allowed Languages</label>
+            <div className="flex gap-4 flex-wrap">
                 {availableLanguages.map((lang) => (
-                <label
-                    key={lang.languageId}
-                    className="flex items-center gap-2 px-3 py-1 border rounded-full cursor-pointer hover:bg-gray-50"
-                >
+                <label key={lang.languageId} className="flex items-center gap-2">
                     <input
                     type="checkbox"
                     checked={formData.languages.some((l) => l.languageId === lang.languageId)}
@@ -313,13 +314,15 @@ export default function AIQuestionGenerator() {
                         } else {
                         setFormData({
                             ...formData,
-                            languages: formData.languages.filter((l) => l.languageId !== lang.languageId),
+                            languages: formData.languages.filter(
+                            (l) => l.languageId !== lang.languageId
+                            ),
                         });
                         }
                     }}
-                    className="accent-indigo-600"
+                    className="h-4 w-4"
                     />
-                    {lang.languageName}
+                    <span className="text-sm">{lang.languageName}</span>
                 </label>
                 ))}
             </div>
@@ -327,7 +330,7 @@ export default function AIQuestionGenerator() {
 
             {/* Model */}
             <div>
-            <label className="block text-sm font-semibold mb-1">AI Model</label>
+            <label className="block text-sm font-medium mb-1">AI Model</label>
             <select
                 name="model"
                 value={formData.model}
@@ -340,23 +343,31 @@ export default function AIQuestionGenerator() {
             </div>
 
             {/* Buttons */}
-            <div className="flex gap-4 justify-end pt-4">
-            <button
-                onClick={() => setStep(1)}
-                className="px-4 py-2 border rounded hover:bg-gray-100"
-            >
-                ← Back
-            </button>
+            <div className="flex gap-4">
             <button
                 onClick={generateQuestions}
-                disabled={loading}
-                className="px-6 py-2 bg-green-600 text-white rounded hover:bg-green-700"
+                disabled={
+                loading ||
+                Object.values(formData.distribution).reduce((a, b) => a + b, 0) !== 100
+                }
+                className={`px-6 py-2 rounded text-white ${
+                Object.values(formData.distribution).reduce((a, b) => a + b, 0) === 100
+                    ? "bg-green-600 hover:bg-green-700"
+                    : "bg-gray-400 cursor-not-allowed"
+                }`}
             >
                 {loading ? "Generating..." : "Generate Questions"}
+            </button>
+            <button
+                onClick={() => setStep(1)}
+                className="px-6 py-2 border rounded hover:bg-gray-100"
+            >
+                ← Back
             </button>
             </div>
         </div>
         )}
+
 
       {/* Step 3 */}
       {step === 3 && (
