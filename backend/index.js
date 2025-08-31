@@ -551,6 +551,12 @@ app.get("/api/editor-sessions", async (req, res) => {
   }
 });
 
+// ======================================================
+// NEW: AI Question Routes
+// ======================================================
+const aiQuestionRoutes = require("./routes/aiQuestionRoutes");
+app.use("/api", aiQuestionRoutes);
+
 // ---- Start ----
 const PORT = process.env.PORT || 5050;
 app.listen(PORT, () => console.log(`Server running on port ${PORT}`));
