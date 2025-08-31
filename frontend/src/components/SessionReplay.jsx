@@ -21,7 +21,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   const [selSessionId, setSelSessionId] = useState(propSessionId || "");
 
   // Playback
-  const [speed, setSpeed] = useState(1); // 0.5 | 1 | 2
+  const [speed, setSpeed] = useState(1);
   const [isPlaying, setIsPlaying] = useState(false);
   const [ended, setEnded] = useState(false);
 
@@ -43,15 +43,15 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   const nextTimerRef = useRef(null);
 
   // Timeline refs
-  const timesRef = useRef([]);       // relative times (ms) for each event
-  const eventsRef = useRef([]);      // events array
-  const playIdxRef = useRef(0);      // next event index to apply
-  const baseMsRef = useRef(0);       // virtual time at (re)start
-  const startWallRef = useRef(0);    // wall time at (re)start
+  const timesRef = useRef([]);
+  const eventsRef = useRef([]);
+  const playIdxRef = useRef(0);
+  const baseMsRef = useRef(0);
+  const startWallRef = useRef(0);
 
   // Marker state
-  const [pauseMarkers, setPauseMarkers] = useState([]); // [{start, end, mid, dur}]
-  const [runMarkers, setRunMarkers] = useState([]);     // [{t, kind}] kind: pass|compile|fail
+  const [pauseMarkers, setPauseMarkers] = useState([]);
+  const [runMarkers, setRunMarkers] = useState([]);
 
   const monacoLanguage = useMemo(() => {
     if (!session?.languageId) return "plaintext";
@@ -66,29 +66,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
     setSessions(data.sessions || []);
   };
 
-  const fetchSubmissionMarkersOptional = async (ses) => {
-    // Optional endpoint: /api/submissions/markers?candidate_id=..&screening_test_id=..&questionId=..&sessionStart=<ISO>
-    // Expected return: { markers: [{ t: <ms-from-session-start>, kind: "pass"|"compile"|"fail" }] }
-    try {
-      const params = new URLSearchParams({
-        candidate_id: ses.candidate_id || "",
-        screening_test_id: ses.screening_test_id || "",
-        questionId: ses.questionId || "",
-        sessionId: ses.sessionId || "",
-      }).toString();
-      const url = `${apiBaseUrl}/submissions/markers?${params}`;
-      const { data } = await axios.get(url);
-      const arr = Array.isArray(data?.markers) ? data.markers : [];
-      // clamp to duration later in render
-      setRunMarkers(arr.map(m => ({ t: Number(m.t) || 0, kind: m.kind || "fail", meta: m.meta || null })));
-    } catch {
-      // endpoint not present; ignore silently
-      setRunMarkers([]);
-    }
-  };
-
   const computePauseMarkers = (evts, relTimes) => {
-    // Use only "change" events to detect idle gaps
     const idxs = [];
     for (let i = 0; i < evts.length; i++) {
       if (evts[i].type === "change") idxs.push(i);
@@ -114,20 +92,32 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
 
       const evts = ses?.events || [];
       eventsRef.current = evts;
+
       if (evts.length) {
         const t0 = evts[0].t;
         const times = evts.map((e) => e.t - t0);
         timesRef.current = times;
         setDurationMs(times[times.length - 1] || 0);
         computePauseMarkers(evts, times);
+
+        // Build run markers from inlined events
+        const runEvts = evts.filter((e) => e.type === "run_result");
+        setRunMarkers(
+          runEvts.map((e) => {
+            const dt = e.t - t0;
+            let kind = "fail";
+            if (e.status === "passed") kind = "pass";
+            else if (e.status === "compile_error") kind = "compile";
+            else if (e.status === "runtime_error") kind = "fail";
+            return { t: dt, kind, meta: e.message || null };
+          })
+        );
       } else {
         timesRef.current = [];
         setDurationMs(0);
         setPauseMarkers([]);
+        setRunMarkers([]);
       }
-
-      setRunMarkers([]);
-      fetchSubmissionMarkersOptional(ses); // best-effort
 
       resetToStart();
     } finally {
@@ -356,7 +346,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   // ---------- UI helpers: markers ----------
   const pct = (t) => (durationMs > 0 ? (t / durationMs) * 100 : 0);
 
-  // Color for run markers
   const runColor = (kind) =>
     kind === "pass" ? "bg-green-500" : kind === "compile" ? "bg-red-500" : "bg-orange-400";
 
@@ -449,7 +438,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
 
       {/* Player area */}
       <div className="flex-1 flex flex-col p-6">
-        {/* Frame */}
         <div className="relative flex-1 rounded-2xl overflow-hidden shadow-xl ring-1 ring-slate-200 bg-black">
           <Editor
             height="100%"
@@ -469,18 +457,14 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
             }}
           />
 
-          {/* Bottom gradient */}
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/70 to-transparent" />
 
-          {/* Controls overlay */}
           <div className="absolute inset-x-0 bottom-0 px-4 pb-4 pt-2 flex flex-col gap-3">
 
-            {/* --- Marker Track --- */}
+            {/* Marker Track */}
             <div className="relative w-full h-3 mb-0.5">
-              {/* Track */}
               <div className="absolute inset-0 rounded-full bg-white/15" />
 
-              {/* Pause markers as bands */}
               {pauseMarkers.map((m, i) => (
                 <div
                   key={`pause-${i}`}
@@ -493,7 +477,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
                 />
               ))}
 
-              {/* Run markers (ticks) */}
               {runMarkers.map((r, i) => (
                 <div
                   key={`run-${i}`}
@@ -509,7 +492,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
                 />
               ))}
 
-              {/* Current position needle */}
               <div
                 className="absolute top-0 h-3 w-[2px] bg-white rounded-sm shadow-[0_0_6px_rgba(255,255,255,0.8)]"
                 style={{ left: `${Math.min(99.8, Math.max(0, pct(dragging ? dragMs : progressMs)))}%` }}
@@ -536,7 +518,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
               <span className="text-xs text-white/90 w-12">{fmt(durationMs)}</span>
             </div>
 
-            {/* Buttons + Speed */}
+            {/* Buttons */}
             <div className="flex items-center gap-2">
               <button
                 onClick={() => {
@@ -580,7 +562,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
           </div>
         </div>
 
-        {/* Footer hint */}
         <div className="mt-3 text-[11px] text-slate-500">
           Drag the timeline to seek. Space/K to play-pause. J/L or ←/→ to seek. Shift+Arrows = ±10s.
         </div>

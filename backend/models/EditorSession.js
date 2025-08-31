@@ -2,14 +2,27 @@
 const mongoose = require("mongoose");
 
 const eventSchema = new mongoose.Schema({
-  t: Number, // timestamp (ms)
-  type: { type: String, enum: ["change", "cursor", "selection"] },
-  range: Object,       // for change
-  text: String,        // inserted text
-  rangeLength: Number, // deleted chars
+  t: { type: Number, required: true }, 
+  type: { 
+    type: String, 
+    enum: ["change", "cursor", "selection", "pause", "run_result"], 
+    required: true 
+  },
+
+  // code editing
+  range: Object,
+  text: String,
+  rangeLength: Number,
   versionId: Number,
-  position: Object,    // { lineNumber, column }
-  selection: Object,   // { startLineNumber, ... }
+  position: Object,
+  selection: Object,
+
+  // run & pause
+  status: { 
+    type: String, 
+    enum: ["passed", "compile_error", "runtime_error", "failed", "pause"], 
+  },
+  message: { type: String },
 }, { _id: false });
 
 const editorSessionSchema = new mongoose.Schema({
