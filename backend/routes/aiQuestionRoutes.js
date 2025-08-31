@@ -118,20 +118,16 @@ Schema (strict, all fields required):
     { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
   ],
   "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code" }
+    { "languageId": number, "languageName": "string", "body": "starter code (driver + solve method, with I/O parsing)" }
   ]
 }
 
 Rules:
-- At least 5 test cases (normal + edge + boundary). At least 2 visible.
+- At least 5 test cases (normal + edge + boundary). ≥2 visible.
 - sampleInput/sampleOutput must never be empty or N/A.
 - Each difficulty must match exactly the requested distribution.
-- Scaffolds required for ALL selected languages.
-- Scaffold must include driver + a single solve method with TODO.
-- Always include imports/wrappers Judge0 expects:
-  - Java → public class Main
-  - Python → def solve()
-  - C++ → #include <bits/stdc++.h>
+- Scaffolds **must exist** for ALL selected languages, including I/O handling code.
+- Scaffold must leave only the core logic TODO for user.
 - Titles must be descriptive but unique, no random tokens.
 
 Return only a valid JSON array of questions, no commentary.
@@ -170,67 +166,65 @@ async function callAI(primaryModel, prompt) {
   }
 }
 
-/** ---------- Deduplication Utility ---------- */
-async function ensureUnique(question, model, basePrompt, seenCache = []) {
+/** ---------- Deduplication + Scaffold Enforcement ---------- */
+async function ensureValid(question, model, basePrompt, languages, seenCache = []) {
   let attempts = 0;
-  while (attempts < 2) {
+  while (attempts < 3) {
     const inBatchDup = seenCache.some(
       (q) => levenshtein(q.title, question.title) > 0.85 || levenshtein(q.description, question.description) > 0.85
     );
     const dbDup = await isDuplicate(question);
 
-    const hasScaffolds = question.scaffolds && question.scaffolds.length > 0;
+    const hasScaffolds =
+      question.scaffolds &&
+      question.scaffolds.length === languages.length &&
+      question.scaffolds.every((s) => s.body && s.body.includes("solve"));
+
     const hasTests = question.testCases && question.testCases.length >= 5;
     const hasSample = question.sampleInput && question.sampleOutput;
 
     if (!inBatchDup && !dbDup && hasScaffolds && hasTests && hasSample) return question;
 
     attempts++;
-    const regenPrompt = basePrompt + `\n\nRegenerate with full schema, avoid duplicates, enforce difficulty.`;
+    console.warn(`⚠️ Validation failed, regenerating (attempt ${attempts})...`);
+
+    const regenPrompt =
+      basePrompt +
+      `\n\nImportant: Ensure scaffolds for ALL selected languages (${languages
+        .map((l) => l.languageName)
+        .join(", ")}) include drivers + I/O, not placeholders.`;
     let aiResponse = await callAI(model, regenPrompt);
     const [regenQ] = extractJsonArray(aiResponse);
     question = regenQ || question;
   }
-  return question;
+
+  // worst-case fallback scaffolds
+  const scaffolds = (languages || []).map((lang) => ({
+    languageId: lang.languageId,
+    languageName: lang.languageName,
+    body: generatePlaceholderScaffold(lang.languageName),
+  }));
+  return { ...question, scaffolds };
 }
 
-// ---------- Generate Questions ----------
+/** ---------- Generate Questions ---------- */
 router.post("/generate-questions", async (req, res) => {
-  const {
-    jobDescription,
-    seniorityLevels,
-    experienceRange,
-    numQuestions,
-    totalTime,
-    model,
-    languages,
-    distributionOverride,
-  } = req.body;
+  const { jobDescription, seniorityLevels, experienceRange, numQuestions, totalTime, model, languages, distributionOverride } = req.body;
 
   try {
-    // ✅ Use client distribution if provided
     let distribution = distributionOverride;
-    if (!distributionOverride) {
+    if (!distribution) {
       let easy = Math.floor(numQuestions * 0.3);
       let medium = Math.floor(numQuestions * 0.5);
       let hard = numQuestions - (easy + medium);
       distribution = { Easy: easy, Medium: medium, Hard: hard };
     }
 
-    console.log("📊 Final distribution:", distribution);
-
-    const prompt = buildPrompt({
-      jobDescription,
-      seniorityLevels,
-      experienceRange,
-      distribution,
-      languages,
-    });
+    const prompt = buildPrompt({ jobDescription, seniorityLevels, experienceRange, distribution, languages });
 
     let aiResponse = await callAI(model, prompt);
     let questions = extractJsonArray(aiResponse);
 
-    // enforce per-difficulty count
     const grouped = { Easy: [], Medium: [], Hard: [] };
     for (const q of questions) {
       if (grouped[q.difficulty]) grouped[q.difficulty].push(q);
@@ -241,38 +235,29 @@ router.post("/generate-questions", async (req, res) => {
       ...grouped.Hard.slice(0, distribution.Hard),
     ];
 
+    const baseTime = Math.floor(totalTime / numQuestions);
+    const extra = totalTime - baseTime * numQuestions;
+
     const uniqueQuestions = [];
-    for (const q of selected) {
-      const uq = await ensureUnique(q, model, prompt, uniqueQuestions);
-      const scaffolds = (languages || []).map((lang) => {
-        const existing = (uq.scaffolds || []).find(
-          (s) => s.languageName === lang.languageName
-        );
-        return (
-          existing || {
-            languageId: lang.languageId,
-            languageName: lang.languageName,
-            body: generatePlaceholderScaffold(lang.languageName),
-          }
-        );
-      });
+    for (let idx = 0; idx < selected.length; idx++) {
+      let q = selected[idx];
+      const uq = await ensureValid(q, model, prompt, languages, uniqueQuestions);
+
       uniqueQuestions.push({
         ...uq,
-        scaffolds,
-        timeAllowed: Math.floor(totalTime / numQuestions) || 15,
+        timeAllowed: baseTime + (idx < extra ? 1 : 0),
       });
     }
 
     res.json({ questions: uniqueQuestions, distribution });
   } catch (err) {
-    console.error("AI generation error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to generate questions" });
   }
 });
 
 /** ---------- Regenerate Question ---------- */
 router.post("/regenerate-question", async (req, res) => {
-  const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages } = req.body;
+  const { jobDescription, seniorityLevels, experienceRange, difficulty, model, languages, timeAllowed } = req.body;
 
   try {
     const prompt = `
@@ -283,39 +268,18 @@ Seniority Levels: ${Array.isArray(seniorityLevels) ? seniorityLevels.join(", ") 
 Experience Range: ${experienceRange?.min ?? 0}–${experienceRange?.max ?? ""} years
 Languages: ${languages.map((l) => l.languageName || l).join(", ")}
 
-Schema (strict, all fields required):
-{
-  "title": "string (unique)",
-  "description": "string",
-  "difficulty": "${difficulty}",
-  "tags": ["string"],
-  "sampleInput": "string",
-  "sampleOutput": "string",
-  "testCases": [
-    { "input": "string", "output": "string", "score": 1, "explanation": "string", "visible": true|false }
-  ],
-  "scaffolds": [
-    { "languageId": number, "languageName": "string", "body": "starter code" }
-  ]
-}
-
 Rules:
-- Must include ≥5 test cases (2 visible).
+- Must follow full schema (title, desc, tags, sample, testCases ≥5, scaffolds).
 - sampleInput/sampleOutput must map to a testCase.
-- Scaffolds required for all selected languages.
+- Scaffolds required for ALL selected languages, with driver + solve method + I/O.
 - Must not duplicate any previous question.
 `;
 
     let aiResponse = await callAI(model, prompt);
     let [question] = extractJsonArray(aiResponse);
-    question = await ensureUnique(question, model, prompt);
+    question = await ensureValid(question, model, prompt, languages);
 
-    const scaffolds = (languages || []).map((lang) => {
-      const existing = (question.scaffolds || []).find((s) => s.languageName === lang.languageName);
-      return existing || { languageId: lang.languageId, languageName: lang.languageName, body: generatePlaceholderScaffold(lang.languageName) };
-    });
-
-    res.json({ question: { ...question, scaffolds } });
+    res.json({ question: { ...question, timeAllowed: timeAllowed || 15 } });
   } catch (err) {
     res.status(500).json({ error: "Failed to regenerate question" });
   }
