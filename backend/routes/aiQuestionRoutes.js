@@ -47,6 +47,7 @@ Return valid JSON array only.
  * Low-level API calls
  */
 async function callOpenAI(prompt) {
+  console.log("⚡ Calling OpenAI...");
   const res = await axios.post(
     "https://api.openai.com/v1/chat/completions",
     {
@@ -62,8 +63,9 @@ async function callOpenAI(prompt) {
 }
 
 async function callGemini(prompt) {
+  console.log("⚡ Calling Gemini 2.0 Flash...");
   const res = await axios.post(
-    `https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key=${process.env.GEMINI_API_KEY}`,
+    `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${process.env.GEMINI_API_KEY}`,
     { contents: [{ parts: [{ text: prompt }] }] },
     { headers: { "Content-Type": "application/json" } }
   );
