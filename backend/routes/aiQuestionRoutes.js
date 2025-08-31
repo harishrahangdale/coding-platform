@@ -7,31 +7,59 @@ const Scaffold = require("../models/Scaffold");
 const router = express.Router();
 
 /**
- * Utility: Safe JSON extractor
+ * Utility: Try to clean/repair nearly-JSON text
+ */
+function healJsonString(str) {
+  return str
+    // Remove control characters
+    .replace(/[\u0000-\u0019]+/g, " ")
+    // Remove trailing commas before ] or }
+    .replace(/,\s*([}\]])/g, "$1")
+    // Escape unescaped newlines inside strings
+    .replace(/([^\\])\n/g, "$1\\n")
+    // Ensure backslashes are properly escaped
+    .replace(/\\(?!["\\/bfnrtu])/g, "\\\\");
+}
+
+/**
+ * Utility: Safe JSON extractor with healing
  */
 function extractJsonArray(text) {
   if (!text) return [];
 
   // Remove Markdown fences
-  const cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
+  let cleaned = text.replace(/```json/gi, "").replace(/```/g, "").trim();
 
+  // Try direct parse
   try {
     const parsed = JSON.parse(cleaned);
     if (Array.isArray(parsed)) return parsed;
-  } catch (e) {
-    // continue below
-  }
+  } catch (_) {}
 
-  // Fallback: substring from first [ to last ]
+  // Slice between [ ... ]
   const firstIdx = cleaned.indexOf("[");
   const lastIdx = cleaned.lastIndexOf("]");
   if (firstIdx !== -1 && lastIdx !== -1 && lastIdx > firstIdx) {
-    const jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
+    let jsonSub = cleaned.slice(firstIdx, lastIdx + 1);
+
+    // Try parse directly
     try {
       const parsed = JSON.parse(jsonSub);
       if (Array.isArray(parsed)) return parsed;
     } catch (err) {
-      console.error("⚠️ extractJsonArray fallback parse failed:", err.message);
+      console.warn("⚠️ extractJsonArray fallback parse failed:", err.message);
+
+      // Apply healing and retry
+      try {
+        const healed = healJsonString(jsonSub);
+        const parsed = JSON.parse(healed);
+        if (Array.isArray(parsed)) {
+          console.log("💊 Healed JSON parse succeeded");
+          return parsed;
+        }
+      } catch (err2) {
+        console.error("❌ Healed parse failed:", err2.message);
+      }
     }
   }
 
@@ -92,7 +120,7 @@ Return only a **valid JSON array** of questions, with no extra commentary.
 }
 
 /**
- * Utility: Call AI (with fallback)
+ * Utility: Call AI (with fallback OpenAI ↔ Gemini)
  */
 async function callAI(primaryModel, prompt) {
   const openaiKey = process.env.OPENAI_API_KEY;
@@ -135,112 +163,70 @@ async function callAI(primaryModel, prompt) {
   }
 }
 
-/**
- * Generate Questions
- */
+// ---------- Generate Questions ----------
 router.post("/generate-questions", async (req, res) => {
-  const { jobDescription, seniorityLevel, experienceYears, numQuestions, totalTime, model, languages, distributionOverride } = req.body;
+  const { jobDescription, seniorityLevel, experienceYears, numQuestions, totalTime, model, languages } = req.body;
 
   try {
-    console.log("📥 Incoming /generate-questions request:", {
-      jobDescription: jobDescription?.slice(0, 200) + "...",
-      seniorityLevel,
-      experienceYears,
-      numQuestions,
-      totalTime,
-      model,
-      langs: languages?.map((l) => l.languageName || l),
-    });
+    // Balanced distribution (ensures sum == numQuestions)
+    let easy = Math.floor(numQuestions * 0.3);
+    let medium = Math.floor(numQuestions * 0.5);
+    let hard = numQuestions - (easy + medium);
 
-    // --- Distribution logic ---
-    let easy = distributionOverride?.Easy ?? Math.floor(numQuestions * 0.3);
-    let medium = distributionOverride?.Medium ?? Math.floor(numQuestions * 0.5);
-    let hard = distributionOverride?.Hard ?? Math.floor(numQuestions * 0.2);
-    let allocated = easy + medium + hard;
-    let remainder = numQuestions - allocated;
-
-    const buckets = [
-      { key: "Medium", value: medium },
-      { key: "Easy", value: easy },
-      { key: "Hard", value: hard },
-    ];
-    let i = 0;
-    while (remainder > 0) {
-      buckets[i % buckets.length].value++;
-      remainder--;
-      i++;
+    if (easy + medium + hard !== numQuestions) {
+      hard = numQuestions - (easy + medium);
     }
-    const distribution = {
-      Easy: buckets.find((b) => b.key === "Easy").value,
-      Medium: buckets.find((b) => b.key === "Medium").value,
-      Hard: buckets.find((b) => b.key === "Hard").value,
-    };
+
+    const distribution = { Easy: easy, Medium: medium, Hard: hard };
     console.log("📊 Final distribution:", distribution);
 
-    // --- Prompt ---
     const prompt = buildPrompt({ jobDescription, seniorityLevel, experienceYears, numQuestions, distribution, languages });
     console.log("📝 Prompt built, length:", prompt.length);
 
-    // --- Call AI ---
-    const aiResponse = await callAI(model, prompt);
-    const questions = extractJsonArray(aiResponse);
-
-    if (!Array.isArray(questions) || questions.length === 0) {
-      throw new Error("Invalid AI response (not JSON)");
-    }
-
-    const perQuestionTime = Math.floor(totalTime / numQuestions);
-    const normalized = questions.map((q) => ({
+    let aiResponse = await callAI(model, prompt);
+    const questions = extractJsonArray(aiResponse).map((q) => ({
       ...q,
-      timeAllowed: perQuestionTime || 15,
+      timeAllowed: Math.floor(totalTime / numQuestions) || 15,
     }));
 
-    res.json({ questions: normalized, distribution });
+    res.json({ questions, distribution });
   } catch (err) {
-    console.error("AI generation error:", err.response?.data || err.message || err);
+    console.error("AI generation error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to generate questions" });
   }
 });
 
-/**
- * Regenerate a single Question
- */
+// ---------- Regenerate Single Question ----------
 router.post("/regenerate-question", async (req, res) => {
   const { jobDescription, seniorityLevel, experienceYears, difficulty, model, languages } = req.body;
+
   try {
     const prompt = `
 Generate 1 unique ${difficulty} coding question for:
+
 Job Description: ${jobDescription}
-Seniority: ${seniorityLevel}
+Seniority Level: ${seniorityLevel}
 Experience: ${experienceYears} years
 Languages: ${languages.map((l) => l.languageName || l).join(", ")}
 
 Rules:
-- At least 5 test cases (normal, edge, boundary), 2 visible, all with explanations.
-- Must follow the schema used before.
-- Scaffold: must contain one public method/function named contextually, with TODO only, plus driver code to handle stdin/stdout like HackerRank/HackerEarth.
-
-Return only a JSON array with 1 object.
+- Must strictly follow the same schema as before.
+- Must include at least 5 test cases (normal, edge, boundary cases).
+- At least 2 test cases must be visible.
+- Scaffold must contain a driver + a single public method with TODO.
+Return a JSON array with exactly 1 question object, no extra commentary.
 `;
 
-    console.log("♻️ Regenerate prompt length:", prompt.length);
-
-    const aiResponse = await callAI(model, prompt);
-    const arr = extractJsonArray(aiResponse);
-    const [question] = arr;
-
-    if (!question) throw new Error("Invalid AI response for regenerate");
-
+    let aiResponse = await callAI(model, prompt);
+    const [question] = extractJsonArray(aiResponse);
     res.json({ question });
   } catch (err) {
-    console.error("Regenerate error:", err.response?.data || err.message || err);
+    console.error("Regenerate error:", err.response?.data || err.message);
     res.status(500).json({ error: "Failed to regenerate question" });
   }
 });
 
-/**
- * Save Questions + Scaffolds
- */
+// ---------- Save Questions + Scaffolds ----------
 router.post("/save-questions", async (req, res) => {
   try {
     const { questions, draft } = req.body;
