@@ -1,6 +1,8 @@
 import React, { useState } from "react";
 import axios from "axios";
 import toast, { Toaster } from "react-hot-toast";
+import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
+import { vscDarkPlus } from "react-syntax-highlighter/dist/esm/styles/prism";
 
 const API_BASE_URL =
   process.env.REACT_APP_API_BASE_URL || "https://coding-platform-teq9.onrender.com/api";
@@ -10,6 +12,15 @@ const availableLanguages = [
   { languageId: 71, languageName: "Python 3.8" },
   { languageId: 54, languageName: "C++ 17" },
 ];
+
+function detectLanguage(langName) {
+  if (!langName) return "text";
+  const lower = langName.toLowerCase();
+  if (lower.includes("java")) return "java";
+  if (lower.includes("python")) return "python";
+  if (lower.includes("c++")) return "cpp";
+  return "text";
+}
 
 export default function AIQuestionGenerator() {
   const [step, setStep] = useState(1);
@@ -26,7 +37,7 @@ export default function AIQuestionGenerator() {
 
   const [questions, setQuestions] = useState([]);
   const [loading, setLoading] = useState(false);
-  const [activeScaffoldTab, setActiveScaffoldTab] = useState({}); // {index: languageId}
+  const [activeScaffoldTab, setActiveScaffoldTab] = useState({});
 
   const handleChange = (e) =>
     setFormData({ ...formData, [e.target.name]: e.target.value });
@@ -36,15 +47,9 @@ export default function AIQuestionGenerator() {
     toast.loading("Generating questions...");
     try {
       const distributionOverride = {
-        Easy: Math.round(
-          (formData.numQuestions * formData.distribution.Easy) / 100
-        ),
-        Medium: Math.round(
-          (formData.numQuestions * formData.distribution.Medium) / 100
-        ),
-        Hard: Math.round(
-          (formData.numQuestions * formData.distribution.Hard) / 100
-        ),
+        Easy: Math.round((formData.numQuestions * formData.distribution.Easy) / 100),
+        Medium: Math.round((formData.numQuestions * formData.distribution.Medium) / 100),
+        Hard: Math.round((formData.numQuestions * formData.distribution.Hard) / 100),
       };
       const res = await axios.post(`${API_BASE_URL}/generate-questions`, {
         ...formData,
@@ -102,9 +107,7 @@ export default function AIQuestionGenerator() {
 
   return (
     <div className="p-6 space-y-6 max-w-5xl mx-auto">
-      {/* Toast container */}
       <Toaster position="top-right" />
-
       <h1 className="text-2xl font-bold">AI Question Generator</h1>
 
       {/* Stepper */}
@@ -115,18 +118,12 @@ export default function AIQuestionGenerator() {
             <div key={label} className="flex items-center gap-2">
               <div
                 className={`w-8 h-8 flex items-center justify-center rounded-full border font-bold ${
-                  step === stepNum
-                    ? "bg-indigo-600 text-white"
-                    : "bg-gray-200 text-gray-700"
+                  step === stepNum ? "bg-indigo-600 text-white" : "bg-gray-200 text-gray-700"
                 }`}
               >
                 {stepNum}
               </div>
-              <span
-                className={
-                  step === stepNum ? "font-semibold" : "text-gray-500"
-                }
-              >
+              <span className={step === stepNum ? "font-semibold" : "text-gray-500"}>
                 {label}
               </span>
             </div>
@@ -134,7 +131,7 @@ export default function AIQuestionGenerator() {
         })}
       </div>
 
-      {/* Step 1: JD Input */}
+      {/* Step 1 */}
       {step === 1 && (
         <div className="p-6 bg-white rounded shadow space-y-4">
           <textarea
@@ -153,15 +150,13 @@ export default function AIQuestionGenerator() {
         </div>
       )}
 
-      {/* Step 2: Parameters */}
+      {/* Step 2 */}
       {step === 2 && (
         <div className="p-6 bg-white rounded shadow space-y-6">
           {/* Seniority & Experience */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Seniority Level
-              </label>
+              <label className="block text-sm font-medium mb-1">Seniority Level</label>
               <select
                 name="seniorityLevel"
                 value={formData.seniorityLevel}
@@ -173,11 +168,8 @@ export default function AIQuestionGenerator() {
                 <option>Senior</option>
               </select>
             </div>
-
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Years of Experience
-              </label>
+              <label className="block text-sm font-medium mb-1">Years of Experience</label>
               <input
                 type="number"
                 name="experienceYears"
@@ -191,9 +183,7 @@ export default function AIQuestionGenerator() {
           {/* Questions & Time */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Number of Questions
-              </label>
+              <label className="block text-sm font-medium mb-1">Number of Questions</label>
               <input
                 type="number"
                 name="numQuestions"
@@ -203,9 +193,7 @@ export default function AIQuestionGenerator() {
               />
             </div>
             <div>
-              <label className="block text-sm font-medium mb-1">
-                Total Time (minutes)
-              </label>
+              <label className="block text-sm font-medium mb-1">Total Time (minutes)</label>
               <input
                 type="number"
                 name="totalTime"
@@ -216,11 +204,9 @@ export default function AIQuestionGenerator() {
             </div>
           </div>
 
-          {/* Difficulty sliders */}
+          {/* Difficulty */}
           <div>
-            <label className="block text-sm font-medium mb-2">
-              Difficulty Distribution (%)
-            </label>
+            <label className="block text-sm font-medium mb-2">Difficulty Distribution (%)</label>
             {["Easy", "Medium", "Hard"].map((d) => (
               <div key={d} className="flex items-center gap-2 my-1">
                 <label className="w-20">{d}</label>
@@ -244,29 +230,20 @@ export default function AIQuestionGenerator() {
 
           {/* Languages */}
           <div className="border p-3 rounded">
-            <label className="block text-sm font-medium mb-2">
-              Allowed Languages
-            </label>
+            <label className="block text-sm font-medium mb-2">Allowed Languages</label>
             <div className="flex gap-2 flex-wrap mt-2">
               {availableLanguages.map((lang) => (
                 <label key={lang.languageId} className="flex items-center gap-1">
                   <input
                     type="checkbox"
-                    checked={formData.languages.some(
-                      (l) => l.languageId === lang.languageId
-                    )}
+                    checked={formData.languages.some((l) => l.languageId === lang.languageId)}
                     onChange={(e) => {
                       if (e.target.checked) {
-                        setFormData({
-                          ...formData,
-                          languages: [...formData.languages, lang],
-                        });
+                        setFormData({ ...formData, languages: [...formData.languages, lang] });
                       } else {
                         setFormData({
                           ...formData,
-                          languages: formData.languages.filter(
-                            (l) => l.languageId !== lang.languageId
-                          ),
+                          languages: formData.languages.filter((l) => l.languageId !== lang.languageId),
                         });
                       }
                     }}
@@ -277,7 +254,7 @@ export default function AIQuestionGenerator() {
             </div>
           </div>
 
-          {/* Model Selector */}
+          {/* Model */}
           <div>
             <label className="block text-sm font-medium mb-1">AI Model</label>
             <select
@@ -291,7 +268,6 @@ export default function AIQuestionGenerator() {
             </select>
           </div>
 
-          {/* Buttons */}
           <div className="flex gap-4">
             <button
               onClick={generateQuestions}
@@ -310,37 +286,60 @@ export default function AIQuestionGenerator() {
         </div>
       )}
 
-      {/* Step 3: Preview */}
+      {/* Step 3 */}
       {step === 3 && (
         <div className="space-y-4">
-          <h2 className="font-bold">Generated Questions</h2>
-          <div className="space-y-3">
+          <h2 className="font-bold text-lg">Generated Questions</h2>
+          <div className="space-y-4">
             {questions.map((q, i) => (
-              <div key={i} className="border rounded shadow bg-white">
+              <div key={i} className="rounded-lg border shadow bg-white overflow-hidden">
+                {/* Header */}
                 <button
                   onClick={() =>
                     document.getElementById(`q-content-${i}`).classList.toggle("hidden")
                   }
-                  className="w-full text-left px-4 py-2 font-semibold bg-gray-100 border-b"
+                  className="w-full flex justify-between items-center px-4 py-3 bg-gray-50 border-b hover:bg-gray-100"
                 >
-                  {q.title}{" "}
-                  <span className="ml-2 text-sm text-gray-600">
-                    ({q.difficulty})
-                  </span>
-                </button>
-                <div id={`q-content-${i}`} className="hidden p-4 space-y-3">
-                  <p>{q.description}</p>
-                  <p className="text-sm text-gray-500">
-                    Tags: {q.tags?.join(", ")}
-                  </p>
                   <div>
-                    <p className="font-medium">Sample Test Case:</p>
-                    <pre className="bg-gray-100 p-2 rounded">
+                    <h3 className="font-semibold">{q.title}</h3>
+                    <div className="flex gap-2 mt-1 text-xs">
+                      <span
+                        className={`px-2 py-0.5 rounded-full border ${
+                          q.difficulty === "Easy"
+                            ? "bg-green-50 border-green-200 text-green-700"
+                            : q.difficulty === "Medium"
+                            ? "bg-yellow-50 border-yellow-200 text-yellow-700"
+                            : "bg-red-50 border-red-200 text-red-700"
+                        }`}
+                      >
+                        {q.difficulty}
+                      </span>
+                      {q.tags?.map((tag) => (
+                        <span
+                          key={tag}
+                          className="px-2 py-0.5 rounded-full bg-indigo-50 border border-indigo-200 text-indigo-700"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                    </div>
+                  </div>
+                  <span className="text-gray-500">▼</span>
+                </button>
+
+                {/* Content */}
+                <div id={`q-content-${i}`} className="hidden p-4 space-y-4">
+                  <p className="text-sm">{q.description}</p>
+
+                  {/* Sample Case */}
+                  <div>
+                    <p className="font-medium text-sm mb-1">Sample Test Case</p>
+                    <pre className="bg-gray-100 border rounded p-2 text-sm max-h-32 overflow-auto">
                       {q.sampleInput} → {q.sampleOutput}
                     </pre>
                   </div>
 
-                  {/* Scaffold Tabs */}
+                  {/* Scaffolds */}
                   {q.scaffolds?.length > 0 && (
                     <div>
                       <div className="flex gap-2 mb-2">
@@ -348,15 +347,12 @@ export default function AIQuestionGenerator() {
                           <button
                             key={s.languageId}
                             onClick={() =>
-                              setActiveScaffoldTab({
-                                ...activeScaffoldTab,
-                                [i]: s.languageId,
-                              })
+                              setActiveScaffoldTab({ ...activeScaffoldTab, [i]: s.languageId })
                             }
-                            className={`px-3 py-1 rounded border text-sm ${
+                            className={`px-3 py-1 text-sm rounded border ${
                               activeScaffoldTab[i] === s.languageId
                                 ? "bg-indigo-600 text-white"
-                                : "bg-gray-100"
+                                : "bg-gray-100 hover:bg-gray-200"
                             }`}
                           >
                             {s.languageName}
@@ -370,19 +366,27 @@ export default function AIQuestionGenerator() {
                             (!activeScaffoldTab[i] && s === q.scaffolds[0])
                         )
                         .map((s) => (
-                          <pre
+                          <SyntaxHighlighter
                             key={s.languageId}
-                            className="bg-gray-900 text-green-200 p-3 rounded-md overflow-x-auto"
+                            language={detectLanguage(s.languageName)}
+                            style={vscDarkPlus}
+                            customStyle={{
+                              borderRadius: "0.5rem",
+                              padding: "1rem",
+                              fontSize: "0.85rem",
+                              maxHeight: "15rem",
+                              overflow: "auto",
+                            }}
                           >
                             {s.body}
-                          </pre>
+                          </SyntaxHighlighter>
                         ))}
                     </div>
                   )}
 
                   <button
                     onClick={() => regenerateQuestion(i, q)}
-                    className="px-3 py-1 border rounded text-sm hover:bg-gray-100"
+                    className="px-3 py-1 text-sm border rounded hover:bg-gray-100"
                   >
                     ♻ Regenerate
                   </button>
@@ -391,19 +395,16 @@ export default function AIQuestionGenerator() {
             ))}
           </div>
 
-          {/* Summary Card */}
+          {/* Summary */}
           <div className="p-4 border rounded shadow bg-white">
             <h3 className="font-semibold mb-2">Screening Test Summary</h3>
             <p>Questions: {questions.length}</p>
             <p>
-              Distribution:{" "}
-              {questions.filter((q) => q.difficulty === "Easy").length} Easy,{" "}
+              Distribution: {questions.filter((q) => q.difficulty === "Easy").length} Easy,{" "}
               {questions.filter((q) => q.difficulty === "Medium").length} Medium,{" "}
               {questions.filter((q) => q.difficulty === "Hard").length} Hard
             </p>
-            <p>
-              Languages: {formData.languages.map((l) => l.languageName).join(", ")}
-            </p>
+            <p>Languages: {formData.languages.map((l) => l.languageName).join(", ")}</p>
             <p>Total Duration: {formData.totalTime} mins</p>
           </div>
 
