@@ -3,7 +3,6 @@ import Editor from "@monaco-editor/react";
 import axios from "axios";
 
 const JUDGE0_TO_MONACO = { 50: "c", 54: "cpp", 62: "java", 63: "javascript", 71: "python" };
-const PAUSE_THRESHOLD_MS = 10_000; // >= 10s -> show pause band
 
 function fmt(ms) {
   if (ms == null || Number.isNaN(ms)) return "0:00";
@@ -52,6 +51,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   // Marker state
   const [pauseMarkers, setPauseMarkers] = useState([]);
   const [runMarkers, setRunMarkers] = useState([]);
+  const [annotations, setAnnotations] = useState([]);
 
   const monacoLanguage = useMemo(() => {
     if (!session?.languageId) return "plaintext";
@@ -64,23 +64,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
     const url = `${apiBaseUrl}/editor-sessions${params ? `?${params}` : ""}`;
     const { data } = await axios.get(url);
     setSessions(data.sessions || []);
-  };
-
-  const computePauseMarkers = (evts, relTimes) => {
-    const idxs = [];
-    for (let i = 0; i < evts.length; i++) {
-      if (evts[i].type === "change") idxs.push(i);
-    }
-    const out = [];
-    for (let j = 0; j < idxs.length - 1; j++) {
-      const a = relTimes[idxs[j]];
-      const b = relTimes[idxs[j + 1]];
-      const gap = b - a;
-      if (gap >= PAUSE_THRESHOLD_MS) {
-        out.push({ start: a, end: b, dur: gap, mid: a + gap / 2 });
-      }
-    }
-    setPauseMarkers(out);
   };
 
   const fetchOne = async (sid) => {
@@ -98,25 +81,64 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
         const times = evts.map((e) => e.t - t0);
         timesRef.current = times;
         setDurationMs(times[times.length - 1] || 0);
-        computePauseMarkers(evts, times);
 
-        // Build run markers from inlined events
+        const pauseEvts = evts.filter((e) => e.type === "pause");
+        const pauses = pauseEvts.map((e) => ({
+          start: e.t - t0,
+          end: (e.t - t0) + (Number(e.dur) || 0),
+          dur: Number(e.dur) || 0,
+        }));
+        setPauseMarkers(pauses);
+
         const runEvts = evts.filter((e) => e.type === "run_result");
-        setRunMarkers(
-          runEvts.map((e) => {
-            const dt = e.t - t0;
-            let kind = "fail";
-            if (e.status === "passed") kind = "pass";
-            else if (e.status === "compile_error") kind = "compile";
-            else if (e.status === "runtime_error") kind = "fail";
-            return { t: dt, kind, meta: e.message || null };
-          })
-        );
+        const runs = runEvts.map((e) => {
+          const dt = e.t - t0;
+          let kind = "fail";
+          if (e.status === "passed") kind = "pass";
+          else if (e.status === "compile_error") kind = "compile";
+          else if (e.status === "runtime_error") kind = "fail";
+          return { t: dt, kind, meta: e.message || null };
+        });
+        setRunMarkers(runs);
+
+        // Build annotation list
+        const anns = [];
+        pauses.forEach((p) => {
+          anns.push({ t: p.start, label: `Pause ${fmt(p.dur)}`, type: "pause", dur: p.dur });
+        });
+        runs.forEach((r) => {
+          anns.push({
+            t: r.t,
+            label:
+              r.kind === "pass"
+                ? "Run passed"
+                : r.kind === "compile"
+                ? "Compile error"
+                : "Run failed",
+            type: r.kind,
+            meta: r.meta,
+          });
+        });
+
+        // Suspicious flags
+        const flagged = [];
+        pauses.forEach((p) => {
+          if (p.dur > 30000) {
+            flagged.push({ t: p.start, label: `Suspicious long pause (${fmt(p.dur)})`, type: "flag" });
+          }
+        });
+        const compileErrors = runs.filter((r) => r.kind === "compile");
+        if (compileErrors.length >= 3) {
+          flagged.push({ t: compileErrors[0].t, label: "Repeated compile errors", type: "flag" });
+        }
+
+        setAnnotations([...anns, ...flagged].sort((a, b) => a.t - b.t));
       } else {
         timesRef.current = [];
         setDurationMs(0);
         setPauseMarkers([]);
         setRunMarkers([]);
+        setAnnotations([]);
       }
 
       resetToStart();
@@ -352,7 +374,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   return (
     <div className="h-screen w-full flex bg-gradient-to-br from-slate-50 via-white to-indigo-50">
       {/* Sidebar */}
-      <div className="w-84 max-w-[22rem] border-r bg-white/80 backdrop-blur-sm">
+      <div className="w-84 max-w-[22rem] border-r bg-white/80 backdrop-blur-sm flex flex-col">
         <div className="p-5 border-b bg-white">
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold text-slate-800">Session Replay</div>
@@ -360,7 +382,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
           </div>
         </div>
 
-        <div className="p-5 space-y-5">
+        <div className="p-5 space-y-5 flex-1 overflow-y-auto">
           <div className="space-y-2">
             <label className="text-sm font-medium text-slate-700">Select session</label>
             <select
@@ -422,8 +444,28 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
                   <span className="inline-flex items-center gap-1">
                     <span className="w-3 h-3 rounded bg-orange-400"></span> Runtime/failed
                   </span>
+                  <span className="inline-flex items-center gap-1">
+                    <span className="w-3 h-3 rounded bg-yellow-400"></span> Suspicious flag
+                  </span>
                 </div>
               </div>
+
+              {annotations.length > 0 && (
+                <div className="rounded-xl border bg-white p-4 shadow-sm">
+                  <div className="text-sm font-medium text-slate-800 mb-2">Timeline Annotations</div>
+                  <ul className="text-xs text-slate-600 space-y-1 max-h-48 overflow-y-auto">
+                    {annotations.map((a, i) => (
+                      <li
+                        key={i}
+                        className="cursor-pointer hover:text-indigo-600"
+                        onClick={() => doSeek(a.t)}
+                      >
+                        [{fmt(a.t)}] {a.label}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </>
           )}
 
@@ -468,19 +510,20 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
               {pauseMarkers.map((m, i) => (
                 <div
                   key={`pause-${i}`}
-                  className="absolute top-[2px] h-[8px] rounded bg-orange-300/80"
+                  className="absolute top-[2px] h-[8px] rounded bg-orange-300/80 cursor-pointer"
                   style={{
                     left: `${Math.min(98, Math.max(0, pct(m.start)))}%`,
                     width: `${Math.max(0.75, pct(m.dur))}%`,
                   }}
                   title={`Pause ${fmt(m.dur)} at ${fmt(m.start)}–${fmt(m.end)}`}
+                  onClick={() => doSeek(m.start)}
                 />
               ))}
 
               {runMarkers.map((r, i) => (
                 <div
                   key={`run-${i}`}
-                  className={`absolute top-0 h-3 w-[3px] ${runColor(r.kind)} rounded-sm`}
+                  className={`absolute top-0 h-3 w-[3px] ${runColor(r.kind)} rounded-sm cursor-pointer`}
                   style={{ left: `${Math.min(99.5, Math.max(0, pct(Math.min(r.t, durationMs))))}%` }}
                   title={
                     r.kind === "pass"
@@ -489,6 +532,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
                       ? `Compilation error @ ${fmt(r.t)}`
                       : `Run failed @ ${fmt(r.t)}`
                   }
+                  onClick={() => doSeek(r.t)}
                 />
               ))}
 
