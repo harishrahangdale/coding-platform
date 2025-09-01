@@ -51,7 +51,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   // Marker state
   const [pauseMarkers, setPauseMarkers] = useState([]);
   const [runMarkers, setRunMarkers] = useState([]);
-  const [annotations, setAnnotations] = useState([]);
 
   const monacoLanguage = useMemo(() => {
     if (!session?.languageId) return "plaintext";
@@ -82,63 +81,34 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
         timesRef.current = times;
         setDurationMs(times[times.length - 1] || 0);
 
+        // build pause markers from pause events
         const pauseEvts = evts.filter((e) => e.type === "pause");
-        const pauses = pauseEvts.map((e) => ({
-          start: e.t - t0,
-          end: (e.t - t0) + (Number(e.dur) || 0),
-          dur: Number(e.dur) || 0,
-        }));
-        setPauseMarkers(pauses);
+        setPauseMarkers(
+          pauseEvts.map((e) => ({
+            start: e.t - t0,
+            end: (e.t - t0) + (Number(e.dur) || 0),
+            dur: Number(e.dur) || 0,
+          }))
+        );
 
+        // build run markers from run_result events
         const runEvts = evts.filter((e) => e.type === "run_result");
-        const runs = runEvts.map((e) => {
-          const dt = e.t - t0;
-          let kind = "fail";
-          if (e.status === "passed") kind = "pass";
-          else if (e.status === "compile_error") kind = "compile";
-          else if (e.status === "runtime_error") kind = "fail";
-          return { t: dt, kind, meta: e.message || null };
-        });
-        setRunMarkers(runs);
-
-        // Build annotation list
-        const anns = [];
-        pauses.forEach((p) => {
-          anns.push({ t: p.start, label: `Pause ${fmt(p.dur)}`, type: "pause", dur: p.dur });
-        });
-        runs.forEach((r) => {
-          anns.push({
-            t: r.t,
-            label:
-              r.kind === "pass"
-                ? "Run passed"
-                : r.kind === "compile"
-                ? "Compile error"
-                : "Run failed",
-            type: r.kind,
-            meta: r.meta,
-          });
-        });
-
-        // Suspicious flags
-        const flagged = [];
-        pauses.forEach((p) => {
-          if (p.dur > 30000) {
-            flagged.push({ t: p.start, label: `Suspicious long pause (${fmt(p.dur)})`, type: "flag" });
-          }
-        });
-        const compileErrors = runs.filter((r) => r.kind === "compile");
-        if (compileErrors.length >= 3) {
-          flagged.push({ t: compileErrors[0].t, label: "Repeated compile errors", type: "flag" });
-        }
-
-        setAnnotations([...anns, ...flagged].sort((a, b) => a.t - b.t));
+        setRunMarkers(
+          runEvts.map((e) => {
+            const dt = e.t - t0;
+            let kind = "fail";
+            if (e.status === "passed") kind = "pass";
+            else if (e.status === "compile_error") kind = "compile";
+            else if (e.status === "runtime_error") kind = "fail";
+            else if (e.status === "failed") kind = "fail";
+            return { t: dt, kind, meta: e.message || null };
+          })
+        );
       } else {
         timesRef.current = [];
         setDurationMs(0);
         setPauseMarkers([]);
         setRunMarkers([]);
-        setAnnotations([]);
       }
 
       resetToStart();
@@ -374,7 +344,8 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
   return (
     <div className="h-screen w-full flex bg-gradient-to-br from-slate-50 via-white to-indigo-50">
       {/* Sidebar */}
-      <div className="w-84 max-w-[22rem] border-r bg-white/80 backdrop-blur-sm flex flex-col">
+      {/* Sidebar */}
+      <div className="w-84 max-w-[22rem] border-r bg-white/80 backdrop-blur-sm">
         <div className="p-5 border-b bg-white">
           <div className="flex items-center justify-between">
             <div className="text-lg font-semibold text-slate-800">Session Replay</div>
@@ -382,7 +353,7 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
           </div>
         </div>
 
-        <div className="p-5 space-y-5 flex-1 overflow-y-auto">
+        <div className="p-5 space-y-5">
           <div className="space-y-2">
             <label className="text-sm font-medium text-slate-700">Select session</label>
             <select
@@ -444,28 +415,8 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
                   <span className="inline-flex items-center gap-1">
                     <span className="w-3 h-3 rounded bg-orange-400"></span> Runtime/failed
                   </span>
-                  <span className="inline-flex items-center gap-1">
-                    <span className="w-3 h-3 rounded bg-yellow-400"></span> Suspicious flag
-                  </span>
                 </div>
               </div>
-
-              {annotations.length > 0 && (
-                <div className="rounded-xl border bg-white p-4 shadow-sm">
-                  <div className="text-sm font-medium text-slate-800 mb-2">Timeline Annotations</div>
-                  <ul className="text-xs text-slate-600 space-y-1 max-h-48 overflow-y-auto">
-                    {annotations.map((a, i) => (
-                      <li
-                        key={i}
-                        className="cursor-pointer hover:text-indigo-600"
-                        onClick={() => doSeek(a.t)}
-                      >
-                        [{fmt(a.t)}] {a.label}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
             </>
           )}
 
@@ -477,7 +428,6 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
           </div>
         </div>
       </div>
-
       {/* Player area */}
       <div className="flex-1 flex flex-col p-6">
         <div className="relative flex-1 rounded-2xl overflow-hidden shadow-xl ring-1 ring-slate-200 bg-black">
@@ -486,128 +436,39 @@ export default function SessionReplay({ apiBaseUrl, sessionId: propSessionId, fi
             language={monacoLanguage}
             theme="vs-dark"
             value=""
-            options={{
-              readOnly: true,
-              minimap: { enabled: false },
-              wordWrap: "on",
-              fontSize: 14,
-              automaticLayout: true,
-            }}
-            onMount={(editor, monaco) => {
-              editorRef.current = editor;
-              monacoRef.current = monaco;
-            }}
+            options={{ readOnly: true, minimap: { enabled: false }, wordWrap: "on", fontSize: 14, automaticLayout: true }}
+            onMount={(editor, monaco) => { editorRef.current = editor; monacoRef.current = monaco; }}
           />
 
           <div className="pointer-events-none absolute inset-x-0 bottom-0 h-28 bg-gradient-to-t from-black/70 to-transparent" />
 
           <div className="absolute inset-x-0 bottom-0 px-4 pb-4 pt-2 flex flex-col gap-3">
-
             {/* Marker Track */}
             <div className="relative w-full h-3 mb-0.5">
               <div className="absolute inset-0 rounded-full bg-white/15" />
 
               {pauseMarkers.map((m, i) => (
-                <div
-                  key={`pause-${i}`}
-                  className="absolute top-[2px] h-[8px] rounded bg-orange-300/80 cursor-pointer"
-                  style={{
-                    left: `${Math.min(98, Math.max(0, pct(m.start)))}%`,
-                    width: `${Math.max(0.75, pct(m.dur))}%`,
-                  }}
-                  title={`Pause ${fmt(m.dur)} at ${fmt(m.start)}–${fmt(m.end)}`}
-                  onClick={() => doSeek(m.start)}
-                />
+                <div key={`pause-${i}`} className="absolute top-[2px] h-[8px] rounded bg-orange-300/80"
+                  style={{ left: `${pct(m.start)}%`, width: `${pct(m.dur)}%` }}
+                  title={`Pause ${fmt(m.dur)} at ${fmt(m.start)}–${fmt(m.end)}`} />
               ))}
 
               {runMarkers.map((r, i) => (
-                <div
-                  key={`run-${i}`}
-                  className={`absolute top-0 h-3 w-[3px] ${runColor(r.kind)} rounded-sm cursor-pointer`}
-                  style={{ left: `${Math.min(99.5, Math.max(0, pct(Math.min(r.t, durationMs))))}%` }}
+                <div key={`run-${i}`} className={`absolute top-0 h-3 w-[3px] ${runColor(r.kind)} rounded-sm`}
+                  style={{ left: `${pct(r.t)}%` }}
                   title={
                     r.kind === "pass"
                       ? `Run passed @ ${fmt(r.t)}`
                       : r.kind === "compile"
                       ? `Compilation error @ ${fmt(r.t)}`
                       : `Run failed @ ${fmt(r.t)}`
-                  }
-                  onClick={() => doSeek(r.t)}
-                />
+                  } />
               ))}
 
-              <div
-                className="absolute top-0 h-3 w-[2px] bg-white rounded-sm shadow-[0_0_6px_rgba(255,255,255,0.8)]"
-                style={{ left: `${Math.min(99.8, Math.max(0, pct(dragging ? dragMs : progressMs)))}%` }}
-              />
-            </div>
-
-            {/* Scrubber */}
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-white/90 w-12 text-right">
-                {fmt(dragging ? dragMs : progressMs)}
-              </span>
-              <input
-                type="range"
-                min={0}
-                max={Math.max(0, durationMs)}
-                step={50}
-                value={dragging ? dragMs : progressMs}
-                onMouseDown={onScrubMouseDown}
-                onChange={onScrubChange}
-                onMouseUp={onScrubMouseUp}
-                className="w-full accent-indigo-500"
-                disabled={!eventsRef.current.length}
-              />
-              <span className="text-xs text-white/90 w-12">{fmt(durationMs)}</span>
-            </div>
-
-            {/* Buttons */}
-            <div className="flex items-center gap-2">
-              <button
-                onClick={() => {
-                  if (!eventsRef.current.length) return;
-                  if (ended) { resetToStart(); play(); return; }
-                  isPlaying ? pause() : play();
-                }}
-                className={`px-4 py-2 rounded-lg text-white font-medium ${
-                  ended
-                    ? "bg-indigo-600 hover:bg-indigo-700"
-                    : isPlaying
-                    ? "bg-orange-500 hover:bg-orange-600"
-                    : "bg-green-600 hover:bg-green-700"
-                } transition`}
-                disabled={!eventsRef.current.length}
-              >
-                {ended ? "Replay" : isPlaying ? "Pause" : "Play"}
-              </button>
-
-              <button
-                onClick={stop}
-                className="px-4 py-2 rounded-lg bg-white/10 text-white border border-white/20 hover:bg-white/20 transition"
-                disabled={!eventsRef.current.length}
-              >
-                Stop
-              </button>
-
-              <div className="ml-auto flex items-center gap-2 text-white/90 text-sm">
-                <span>Speed</span>
-                <select
-                  className="bg-white/10 text-white rounded px-2 py-1 border border-white/20"
-                  value={speed}
-                  onChange={(e) => setSpeed(Number(e.target.value))}
-                >
-                  <option value={0.5}>0.5×</option>
-                  <option value={1}>1×</option>
-                  <option value={2}>2×</option>
-                </select>
-              </div>
+              <div className="absolute top-0 h-3 w-[2px] bg-white rounded-sm shadow-[0_0_6px_rgba(255,255,255,0.8)]"
+                style={{ left: `${pct(dragging ? dragMs : progressMs)}%` }} />
             </div>
           </div>
-        </div>
-
-        <div className="mt-3 text-[11px] text-slate-500">
-          Drag the timeline to seek. Space/K to play-pause. J/L or ←/→ to seek. Shift+Arrows = ±10s.
         </div>
       </div>
     </div>
