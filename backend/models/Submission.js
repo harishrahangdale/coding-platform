@@ -55,6 +55,39 @@ const submissionSchema = new mongoose.Schema(
     // Auditing (optional)
     userAgent: { type: String, default: "" },
     ipAddress: { type: String, default: "" },
+    sessionId: { type: String, default: null, index: true },
+
+    // Code analysis results from Gemini
+    codeAnalysis: {
+      logicalCorrectness: {
+        score: { type: Number, default: 0 },
+        maxScore: { type: Number, default: 100 },
+        reasoning: { type: String, default: "" },
+        strengths: { type: [String], default: [] },
+        weaknesses: { type: [String], default: [] },
+        suggestions: { type: [String], default: [] }
+      },
+      codeQuality: {
+        score: { type: Number, default: 0 },
+        maxScore: { type: Number, default: 100 },
+        reasoning: { type: String, default: "" },
+        aspects: {
+          readability: { type: String, default: "Unknown" },
+          maintainability: { type: String, default: "Unknown" },
+          efficiency: { type: String, default: "Unknown" },
+          bestPractices: { type: String, default: "Unknown" }
+        }
+      },
+      overallAssessment: {
+        grade: { type: String, default: "C" },
+        summary: { type: String, default: "" },
+        recommendations: { type: [String], default: [] }
+      }
+    },
+    analysisTimestamp: { type: Date, default: null },
+    
+    // Session replay data
+    sessionEvents: { type: [Object], default: [] }
   },
   { timestamps: true }
 );

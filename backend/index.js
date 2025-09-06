@@ -51,6 +51,39 @@ const judge0 = axios.create({
   },
 });
 
+// Gemini API configuration for code analysis
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY || process.env.API_KEY;
+const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+
+// Gemini API helper functions
+function buildGeminiBody(textPrompt) {
+  return { contents: [{ role: 'user', parts: [{ text: textPrompt }] }] };
+}
+
+async function callGeminiAPI(prompt) {
+  if (!GEMINI_API_KEY) {
+    throw new Error('GEMINI_API_KEY not set in environment variables');
+  }
+  
+  const body = buildGeminiBody(prompt);
+  const response = await axios.post(GEMINI_URL, body, {
+    headers: { 'Content-Type': 'application/json' },
+    timeout: 30000 // 30 second timeout
+  });
+  return response.data;
+}
+
+function extractGeminiResponse(data) {
+  if (!data) return '';
+  if (data.candidates && Array.isArray(data.candidates) && data.candidates.length) {
+    const candidate = data.candidates[0];
+    if (candidate.content && candidate.content.parts && candidate.content.parts.length) {
+      return candidate.content.parts.map(part => part.text).join('\n');
+    }
+  }
+  return '';
+}
+
 // ======================================================
 // AI QUESTIONS MANAGEMENT
 // ======================================================
@@ -165,6 +198,431 @@ app.delete("/api/ai-questions", async (req, res) => {
   } catch (err) {
     console.error("DELETE /api/ai-questions error:", err);
     res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ======================================================
+// CODE ANALYSIS WITH GEMINI
+// ======================================================
+
+// Analyze code logical correctness
+app.post("/api/analyze-code", async (req, res) => {
+  try {
+    const { code, questionTitle, questionDescription, language, testCases } = req.body;
+    
+    if (!code || !questionTitle || !questionDescription) {
+      return res.status(400).json({ error: "code, questionTitle, and questionDescription are required" });
+    }
+
+    // Build the analysis prompt for Gemini
+    const analysisPrompt = `You are an expert code reviewer. Analyze the following code for logical correctness and quality.
+
+QUESTION: ${questionTitle}
+DESCRIPTION: ${questionDescription}
+PROGRAMMING LANGUAGE: ${language || 'Unknown'}
+
+CODE TO ANALYZE:
+\`\`\`${language || 'text'}
+${code}
+\`\`\`
+
+TEST CASES (for context):
+${testCases ? JSON.stringify(testCases, null, 2) : 'No test cases provided'}
+
+Please provide a comprehensive analysis in the following JSON format:
+{
+  "logicalCorrectness": {
+    "score": 85,
+    "maxScore": 100,
+    "reasoning": "The code demonstrates good understanding of the problem but has some logical issues...",
+    "strengths": ["Good algorithm choice", "Proper variable naming"],
+    "weaknesses": ["Missing edge case handling", "Inefficient nested loops"],
+    "suggestions": ["Add null checks", "Consider using a more efficient data structure"]
+  },
+  "codeQuality": {
+    "score": 78,
+    "maxScore": 100,
+    "reasoning": "Code is readable but could be improved...",
+    "aspects": {
+      "readability": "Good",
+      "maintainability": "Fair", 
+      "efficiency": "Poor",
+      "bestPractices": "Good"
+    }
+  },
+  "overallAssessment": {
+    "grade": "B+",
+    "summary": "Solid solution with room for improvement",
+    "recommendations": ["Focus on edge cases", "Optimize time complexity"]
+  }
+}
+
+Be thorough but concise. Focus on logical correctness, algorithm efficiency, and code quality.`;
+
+    // Call Gemini API
+    const geminiResponse = await callGeminiAPI(analysisPrompt);
+    const analysisText = extractGeminiResponse(geminiResponse);
+    
+    if (!analysisText) {
+      throw new Error('Failed to get analysis from Gemini API');
+    }
+
+    // Try to parse JSON response
+    let analysis;
+    try {
+      // Extract JSON from the response (in case there's extra text)
+      const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+      if (jsonMatch) {
+        analysis = JSON.parse(jsonMatch[0]);
+      } else {
+        throw new Error('No JSON found in response');
+      }
+    } catch (parseError) {
+      // Fallback: create a basic analysis structure
+      analysis = {
+        logicalCorrectness: {
+          score: 50,
+          maxScore: 100,
+          reasoning: "Unable to parse detailed analysis. Raw response: " + analysisText.substring(0, 200),
+          strengths: [],
+          weaknesses: ["Analysis parsing failed"],
+          suggestions: ["Please review the code manually"]
+        },
+        codeQuality: {
+          score: 50,
+          maxScore: 100,
+          reasoning: "Analysis parsing failed",
+          aspects: {
+            readability: "Unknown",
+            maintainability: "Unknown",
+            efficiency: "Unknown",
+            bestPractices: "Unknown"
+          }
+        },
+        overallAssessment: {
+          grade: "C",
+          summary: "Analysis parsing failed - manual review recommended",
+          recommendations: ["Review code manually"]
+        }
+      };
+    }
+
+    res.json({
+      success: true,
+      analysis,
+      rawResponse: analysisText,
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error("Code analysis error:", error);
+    res.status(500).json({ 
+      error: "Failed to analyze code", 
+      details: error.message 
+    });
+  }
+});
+
+// ======================================================
+// SUBMISSIONS MANAGEMENT
+// ======================================================
+
+// Get all submissions with pagination and filtering
+app.get("/api/submissions", async (req, res) => {
+  try {
+    const page = parseInt(req.query.page) || 1;
+    const limit = parseInt(req.query.limit) || 10;
+    const search = req.query.search || '';
+    const status = req.query.status;
+
+    const query = {};
+    
+    // Add search functionality
+    if (search) {
+      query.$or = [
+        { candidate_id: { $regex: search, $options: 'i' } },
+        { sessionId: { $regex: search, $options: 'i' } }
+      ];
+    }
+
+    // Add status filtering based on test results
+    if (status && status !== 'all') {
+      if (status === 'Passed') {
+        query['summary.passed'] = { $gt: 0 };
+      } else if (status === 'Failed') {
+        query['summary.passed'] = 0;
+      }
+    }
+
+    const submissions = await Submission.find(query)
+      .populate('questionId', 'title description difficulty timeAllowed')
+      .sort({ createdAt: -1 })
+      .skip((page - 1) * limit)
+      .limit(limit)
+      .lean();
+
+    const total = await Submission.countDocuments(query);
+    const totalPages = Math.ceil(total / limit);
+
+    res.json({
+      submissions,
+      totalPages,
+      currentPage: page,
+      total
+    });
+  } catch (error) {
+    console.error("GET /api/submissions error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get submission markers for timeline
+app.get("/api/submissions/markers", async (req, res) => {
+  try {
+    const { candidate_id, screening_test_id, questionId, sessionId } = req.query;
+    
+    const submissions = await Submission.find({
+      candidate_id,
+      screening_test_id,
+      questionId,
+      sessionId
+    }).sort({ createdAt: 1 }).lean();
+
+    const markers = submissions.map(sub => ({
+      t: new Date(sub.createdAt).getTime() - new Date(submissions[0]?.createdAt || sub.createdAt).getTime(),
+      kind: sub.summary?.passed > 0 ? 'pass' : 'fail',
+      meta: {
+        score: sub.summary?.earnedScore || 0,
+        maxScore: sub.summary?.maxScore || 0,
+        status: sub.status
+      }
+    }));
+
+    res.json({ markers });
+  } catch (error) {
+    console.error("GET /api/submissions/markers error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get single submission details
+app.get("/api/submissions/:id", async (req, res) => {
+  try {
+    const submission = await Submission.findById(req.params.id)
+      .populate('questionId', 'title description difficulty timeAllowed testCases languages')
+      .lean();
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    res.json(submission);
+  } catch (error) {
+    console.error("GET /api/submissions/:id error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Update submission with code analysis
+app.post("/api/submissions/:id/analysis", async (req, res) => {
+  try {
+    const { analysis } = req.body;
+    
+    const submission = await Submission.findByIdAndUpdate(
+      req.params.id,
+      { 
+        $set: { 
+          codeAnalysis: analysis,
+          analysisTimestamp: new Date()
+        } 
+      },
+      { new: true }
+    );
+
+    if (!submission) {
+      return res.status(404).json({ error: "Submission not found" });
+    }
+
+    res.json({ success: true, submission });
+  } catch (error) {
+    console.error("POST /api/submissions/:id/analysis error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ======================================================
+// EDITOR SESSIONS (for replay)
+// ======================================================
+
+// Save editor events
+app.post("/api/editor-sessions", async (req, res) => {
+  try {
+    const { sessionId, candidate_id, screening_test_id, questionId, languageId, events } = req.body;
+    
+    if (!sessionId || !candidate_id || !screening_test_id || !questionId) {
+      return res.status(400).json({ error: "sessionId, candidate_id, screening_test_id, and questionId are required" });
+    }
+
+    const session = await EditorSession.findOneAndUpdate(
+      { sessionId },
+      {
+        sessionId,
+        candidate_id,
+        screening_test_id,
+        questionId: new mongoose.Types.ObjectId(questionId),
+        languageId,
+        events: events || []
+      },
+      { upsert: true, new: true }
+    );
+
+    res.json({ success: true, session });
+  } catch (error) {
+    console.error("POST /api/editor-sessions error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get editor session for replay
+app.get("/api/editor-sessions/:sessionId", async (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    
+    // Find editor session with this sessionId
+    const session = await EditorSession.findOne({ sessionId })
+      .populate('questionId', 'title description difficulty timeAllowed languages')
+      .lean();
+
+    if (!session) {
+      return res.status(404).json({ error: "Session not found" });
+    }
+
+    // Get language name from question languages
+    const languageName = session.questionId?.languages?.find(lang => lang.languageId === session.languageId)?.languageName || `Language ${session.languageId}`;
+
+    // Return session data in the format expected by SessionReplay
+    const sessionData = {
+      sessionId: session.sessionId,
+      candidate_id: session.candidate_id,
+      screening_test_id: session.screening_test_id,
+      questionId: session.questionId,
+      languageId: session.languageId,
+      languageName: languageName,
+      events: session.events || [],
+      createdAt: session.createdAt,
+      updatedAt: session.updatedAt
+    };
+
+    res.json({ session: sessionData });
+  } catch (error) {
+    console.error("GET /api/editor-sessions/:sessionId error:", error);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ======================================================
+// RUN-ONLY ENDPOINT (no submission creation)
+// ======================================================
+
+// Run code for instant feedback without creating submission
+app.post("/api/run-only/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    const { finalCode, languageId, candidate_id, screening_test_id } = req.body;
+
+    if (!finalCode || !languageId) {
+      return res.status(400).json({ error: "finalCode and languageId are required" });
+    }
+
+    const question = await Question.findById(id).lean();
+    if (!question) {
+      return res.status(404).json({ error: "Question not found" });
+    }
+
+    // Get test cases
+    const testCases = question.testCases || [];
+    
+    // If no test cases, create a simple one using sample input/output
+    if (testCases.length === 0) {
+      // Use sample input/output if available, otherwise create a basic test
+      const sampleInput = question.sampleInput || "2 3";
+      const sampleOutput = question.sampleOutput || "5";
+      
+      testCases.push({
+        input: sampleInput,
+        output: sampleOutput,
+        score: 1,
+        explanation: "Sample test case",
+        visible: true
+      });
+    }
+
+    // Use the same logic as the main run endpoint - process each test case individually
+    const results = [];
+    let earnedScore = 0;
+    const maxScore = testCases.reduce((s, t) => s + (t.score || 0), 0);
+
+    for (const [idx, tc] of testCases.entries()) {
+      const stdin = String(tc.input ?? "");
+      const expected = String(tc.output ?? "").trim();
+
+      let submission;
+      try {
+        const response = await judge0.post(
+          "/submissions?base64_encoded=false&wait=true",
+          { source_code: finalCode, language_id: languageId, stdin }
+        );
+        submission = response.data;
+      } catch (judge0Error) {
+        if (judge0Error.response?.status === 429) {
+          // Judge0 API quota exceeded
+          submission = {
+            status: { id: 429, description: "Too Many Requests" },
+            stdout: "",
+            stderr: "Judge0 API quota exceeded. Please try again later.",
+            time: null,
+            memory: null
+          };
+        } else {
+          throw judge0Error;
+        }
+      }
+
+      const normalized = normalizeCaseResult(submission, {
+        stdin,
+        expected,
+        idx,
+        score: tc.score,
+        visible: tc.visible,
+      });
+
+      if (normalized.status === "Passed") earnedScore += normalized.maxScore;
+      results.push(normalized);
+    }
+
+    const summary = {
+      passed: results.filter(r => r.status === "Passed").length,
+      total: results.length,
+      earnedScore,
+      maxScore,
+      message: `${earnedScore}/${maxScore} points • ${results.filter(r => r.status === "Passed").length}/${results.length} test cases passed`,
+    };
+
+    // Only expose visible test cases to publicResults
+    const publicResults = results.filter(r => r.visible);
+
+    res.json({
+      results,
+      publicResults,
+      summary
+    });
+
+  } catch (error) {
+    console.error("Run-only error:", error);
+    res.status(500).json({ 
+      error: "Failed to run code", 
+      details: error.message 
+    });
   }
 });
 
@@ -323,6 +781,9 @@ const normalizeCaseResult = (submission, { stdin, expected, idx, score, visible 
   } else if (statusId === 6) {
     status = "Compilation Error";
     actual = (submission.compile_output || "").trim();
+  } else if (statusId === 429) {
+    status = "API Quota Exceeded";
+    actual = (submission.stderr || "Judge0 API quota exceeded. Please try again later.").trim();
   } else if ([7, 8, 9, 10, 11, 12, 14, 15].includes(statusId)) {
     status = "Runtime Error";
     actual = (submission.stderr || submission.message || "").trim();
@@ -372,7 +833,21 @@ app.post("/api/run/:id", async (req, res) => {
     if (!question) return res.status(404).json({ error: "Question not found" });
 
     const testCases = Array.isArray(question.testCases) ? question.testCases : [];
-    if (testCases.length === 0) return res.status(400).json({ error: "No test cases configured for this question" });
+    
+    // If no test cases, create a simple one using sample input/output
+    if (testCases.length === 0) {
+      // Use sample input/output if available, otherwise create a basic test
+      const sampleInput = question.sampleInput || "2 3";
+      const sampleOutput = question.sampleOutput || "5";
+      
+      testCases.push({
+        input: sampleInput,
+        output: sampleOutput,
+        score: 1,
+        explanation: "Sample test case",
+        visible: true
+      });
+    }
 
     const results = [];
     let earnedScore = 0;
@@ -382,10 +857,27 @@ app.post("/api/run/:id", async (req, res) => {
       const stdin = String(tc.input ?? "");
       const expected = String(tc.output ?? "").trim();
 
-      const { data: submission } = await judge0.post(
-        "/submissions?base64_encoded=false&wait=true",
-        { source_code: finalCode, language_id: languageId, stdin }
-      );
+      let submission;
+      try {
+        const response = await judge0.post(
+          "/submissions?base64_encoded=false&wait=true",
+          { source_code: finalCode, language_id: languageId, stdin }
+        );
+        submission = response.data;
+      } catch (judge0Error) {
+        if (judge0Error.response?.status === 429) {
+          // Judge0 API quota exceeded
+          submission = {
+            status: { id: 429, description: "Too Many Requests" },
+            stdout: "",
+            stderr: "Judge0 API quota exceeded. Please try again later.",
+            time: null,
+            memory: null
+          };
+        } else {
+          throw judge0Error;
+        }
+      }
 
       const normalized = normalizeCaseResult(submission, {
         stdin,
@@ -407,21 +899,133 @@ app.post("/api/run/:id", async (req, res) => {
       message: `${earnedScore}/${maxScore} points • ${results.filter(r => r.status === "Passed").length}/${results.length} test cases passed`,
     };
 
+    // Perform code analysis with Gemini (async, don't block the response)
+    let codeAnalysis = null;
+    if (GEMINI_API_KEY) {
+      // Run analysis in background
+      setImmediate(async () => {
+        try {
+          const analysisResponse = await callGeminiAPI(`You are an expert code reviewer. Analyze the following code for logical correctness and quality.
+
+QUESTION: ${question.title}
+DESCRIPTION: ${question.description}
+PROGRAMMING LANGUAGE: ${languageId}
+
+CODE TO ANALYZE:
+\`\`\`
+${finalCode}
+\`\`\`
+
+TEST CASES (for context):
+${JSON.stringify(testCases, null, 2)}
+
+Please provide a comprehensive analysis in the following JSON format:
+{
+  "logicalCorrectness": {
+    "score": 85,
+    "maxScore": 100,
+    "reasoning": "The code demonstrates good understanding of the problem but has some logical issues...",
+    "strengths": ["Good algorithm choice", "Proper variable naming"],
+    "weaknesses": ["Missing edge case handling", "Inefficient nested loops"],
+    "suggestions": ["Add null checks", "Consider using a more efficient data structure"]
+  },
+  "codeQuality": {
+    "score": 78,
+    "maxScore": 100,
+    "reasoning": "Code is readable but could be improved...",
+    "aspects": {
+      "readability": "Good",
+      "maintainability": "Fair", 
+      "efficiency": "Poor",
+      "bestPractices": "Good"
+    }
+  },
+  "overallAssessment": {
+    "grade": "B+",
+    "summary": "Solid solution with room for improvement",
+    "recommendations": ["Focus on edge cases", "Optimize time complexity"]
+  }
+}
+
+Be thorough but concise. Focus on logical correctness, algorithm efficiency, and code quality.`);
+
+          const analysisText = extractGeminiResponse(analysisResponse);
+          if (analysisText) {
+            try {
+              // First try to extract JSON from markdown code blocks
+              let jsonStr = analysisText;
+              if (analysisText.includes('```json')) {
+                const jsonMatch = analysisText.match(/```json\s*([\s\S]*?)\s*```/);
+                if (jsonMatch) {
+                  jsonStr = jsonMatch[1].trim();
+                }
+              } else {
+                const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+                if (jsonMatch) {
+                  jsonStr = jsonMatch[0];
+                }
+              }
+              
+              if (jsonStr) {
+                // Clean the JSON string before parsing
+                jsonStr = jsonStr
+                  .replace(/,(\s*[}\]])/g, '$1') // Remove trailing commas
+                  .replace(/([{,]\s*)(\w+):/g, '$1"$2":') // Quote unquoted keys
+                  .replace(/:\s*([^",{\[\]\s][^",{\[\]}]*?)(\s*[,\}\]])/g, ': "$1"$2'); // Quote unquoted string values
+                
+                codeAnalysis = JSON.parse(jsonStr);
+                
+                // Update the submission with analysis results (if submission exists)
+                if (saved?._id) {
+                  await Submission.updateOne(
+                    { _id: saved._id },
+                    { 
+                      $set: { 
+                        codeAnalysis,
+                        analysisTimestamp: new Date().toISOString()
+                      } 
+                    }
+                  );
+                }
+              }
+            } catch (parseError) {
+              console.error("Failed to parse code analysis:", parseError);
+              console.error("Raw analysis text:", analysisText);
+              
+              // Fallback: create a basic analysis object
+              codeAnalysis = {
+                error: "Failed to parse AI analysis",
+                rawText: analysisText,
+                timestamp: new Date().toISOString()
+              };
+            }
+          }
+        } catch (analysisError) {
+          console.error("Code analysis failed:", analysisError);
+        }
+      });
+    }
+
     // Save a Submission only if we have candidate + screening test
     let saved = null;
     if (candidate_id && screening_test_id) {
+      const runType = req.body.isFinalSubmission ? "submit" : "run";
+      const status = req.body.isFinalSubmission ? "completed" : "in-progress";
+      
       saved = await Submission.create({
         candidate_id,
         screening_test_id,
-        questionId: id,
+        questionId: new mongoose.Types.ObjectId(id),
         languageId,
         code: String(finalCode),
         results,
         summary,
-        runType: "run",
-        status: "in-progress",
+        runType,
+        status,
         userAgent,
         ipAddress,
+        sessionId: req.body.sessionId || null,
+        sessionEvents: req.body.sessionEvents || [], // Store session replay data
       });
     }
 
@@ -460,10 +1064,27 @@ app.post("/api/run/:id/custom", async (req, res) => {
   }
 
   try {
-    const { data: submission } = await judge0.post(
-      "/submissions?base64_encoded=false&wait=true",
-      { source_code: finalCode, language_id: languageId, stdin }
-    );
+    let submission;
+    try {
+      const response = await judge0.post(
+        "/submissions?base64_encoded=false&wait=true",
+        { source_code: finalCode, language_id: languageId, stdin }
+      );
+      submission = response.data;
+    } catch (judge0Error) {
+      if (judge0Error.response?.status === 429) {
+        // Judge0 API quota exceeded
+        submission = {
+          status: { id: 429, description: "Too Many Requests" },
+          stdout: "",
+          stderr: "Judge0 API quota exceeded. Please try again later.",
+          time: null,
+          memory: null
+        };
+      } else {
+        throw judge0Error;
+      }
+    }
 
     const statusId = submission?.status?.id;
     const statusDesc = submission?.status?.description || "";
@@ -475,6 +1096,9 @@ app.post("/api/run/:id/custom", async (req, res) => {
     if (statusId === 6) {
       status = "Compilation Error";
       stderr = (submission.compile_output || "").trim();
+    } else if (statusId === 429) {
+      status = "API Quota Exceeded";
+      stderr = (submission.stderr || "Judge0 API quota exceeded. Please try again later.").trim();
     } else if ([7, 8, 9, 10, 11, 12, 14, 15].includes(statusId)) {
       status = "Runtime Error";
       stderr = (submission.stderr || submission.message || "").trim();
@@ -564,16 +1188,6 @@ app.post("/api/editor-events", async (req, res) => {
 });
 
 // Get one session by id
-app.get("/api/editor-sessions/:sessionId", async (req, res) => {
-  try {
-    const doc = await EditorSession.findOne({ sessionId: req.params.sessionId }).lean();
-    if (!doc) return res.status(404).json({ error: "Session not found" });
-    res.json({ session: doc });
-  } catch (e) {
-    console.error("GET /api/editor-sessions/:sessionId", e);
-    res.status(500).json({ error: "Failed to fetch session" });
-  }
-});
 
 // List recent sessions (filterable)
 app.get("/api/editor-sessions", async (req, res) => {

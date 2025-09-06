@@ -4,7 +4,7 @@ import { BrowserRouter, Routes, Route, Link, useLocation } from "react-router-do
 import axios from "axios";
 import "./App.css";
 import Judge0Editor from "./components/Judge0Editor";
-import SessionReplay from "./components/SessionReplay";
+import EnhancedSessionReplay from "./components/EnhancedSessionReplay";
 import AIQuestionsManager from "./components/AIQuestionsManager";
 
 const LS_KEY = "ui:leftWidth";
@@ -144,27 +144,37 @@ function MainCodingApp() {
     <div className="h-[calc(100vh-49px)] w-screen overflow-hidden flex">
       {/* LEFT PANE (resizable) */}
       <div
-        className="h-full bg-gray-50 border-r flex flex-col"
-        style={{ width: leftWidth, minWidth: 280 }}
+        className="h-full bg-slate-50 border-r border-slate-200 flex flex-col"
+        style={{ width: leftWidth, minWidth: 320 }}
       >
-        {/* Tabs Header (sticky) */}
-        <div className="px-3 pt-3 bg-gray-50 border-b sticky top-0 z-10">
-          <div className="flex items-center gap-2">
-            {["list", "details"].map((key) => (
-              <button
-                key={key}
-                onClick={() => setActiveTab(key)}
-                className={`px-3 py-1.5 rounded-t border-b-0 border ${
-                  activeTab === key
-                    ? "bg-white border-gray-300 text-indigo-700"
-                    : "bg-gray-100 border-transparent text-gray-700 hover:bg-gray-200"
-                }`}
-              >
-                {key === "list" ? "Questions" : "Details"}
-              </button>
-            ))}
-            <div className="ml-auto text-sm text-gray-500">
-              {questions.length} total
+        {/* Modern Header */}
+        <div className="px-6 py-4 bg-white border-b border-slate-200 sticky top-0 z-10">
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <div className="w-8 h-8 bg-gradient-to-br from-indigo-500 to-purple-600 rounded-lg flex items-center justify-center">
+                <svg className="w-5 h-5 text-white" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 20l4-16m4 4l4 4-4 4M6 16l-4-4 4-4" />
+                </svg>
+              </div>
+              <div>
+                <h2 className="text-lg font-semibold text-slate-900">Questions</h2>
+                <p className="text-sm text-slate-500">{questions.length} available</p>
+              </div>
+            </div>
+            <div className="flex items-center gap-2">
+              {["list", "details"].map((key) => (
+                <button
+                  key={key}
+                  onClick={() => setActiveTab(key)}
+                  className={`px-4 py-2 rounded-lg text-sm font-medium transition-all duration-200 ${
+                    activeTab === key
+                      ? "bg-indigo-100 text-indigo-700 shadow-sm"
+                      : "text-slate-600 hover:bg-slate-100 hover:text-slate-900"
+                  }`}
+                >
+                  {key === "list" ? "Browse" : "Details"}
+                </button>
+              ))}
             </div>
           </div>
         </div>
@@ -172,75 +182,115 @@ function MainCodingApp() {
         {/* Tab: List */}
         {activeTab === "list" && (
           <div className="flex-1 flex flex-col overflow-hidden">
-            {/* Controls */}
-            <div className="p-3 border-b bg-white">
-              <div className="flex gap-2">
-                <input
-                  className="flex-1 border rounded px-2 py-1"
-                  placeholder="Search title or tags…"
-                  value={search}
-                  onChange={(e) => setSearch(e.target.value)}
-                />
-                <select
-                  className="border rounded px-2 py-1"
-                  value={difficulty}
-                  onChange={(e) => setDifficulty(e.target.value)}
-                >
-                  <option>All</option>
-                  <option>Easy</option>
-                  <option>Medium</option>
-                  <option>Hard</option>
-                </select>
+            {/* Modern Search & Filters */}
+            <div className="p-6 bg-white border-b border-slate-200">
+              <div className="space-y-4">
+                <div className="relative">
+                  <div className="absolute inset-y-0 left-0 pl-3 flex items-center pointer-events-none">
+                    <svg className="h-5 w-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 21l-6-6m2-5a7 7 0 11-14 0 7 7 0 0114 0z" />
+                    </svg>
+                  </div>
+                  <input
+                    className="w-full pl-10 pr-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors"
+                    placeholder="Search questions by title or tags..."
+                    value={search}
+                    onChange={(e) => setSearch(e.target.value)}
+                  />
+                </div>
+                <div className="flex items-center gap-3">
+                  <select
+                    className="px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors bg-white"
+                    value={difficulty}
+                    onChange={(e) => setDifficulty(e.target.value)}
+                  >
+                    <option>All Difficulties</option>
+                    <option>Easy</option>
+                    <option>Medium</option>
+                    <option>Hard</option>
+                  </select>
+                  <div className="text-sm text-slate-500">
+                    {filtered.length} of {questions.length} questions
+                  </div>
+                </div>
               </div>
             </div>
 
-            {/* List */}
-            <div className="flex-1 overflow-auto p-3">
+            {/* Modern Question List */}
+            <div className="flex-1 overflow-auto p-6">
               {filtered.length === 0 ? (
-                <div className="text-sm text-gray-500">No matches.</div>
+                <div className="flex flex-col items-center justify-center h-full text-center">
+                  <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                    <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.172 16.172a4 4 0 015.656 0M9 12h6m-6-4h6m2 5.291A7.962 7.962 0 0112 15c-2.34 0-4.29-1.009-5.824-2.709" />
+                    </svg>
+                  </div>
+                  <h3 className="text-lg font-medium text-slate-900 mb-2">No questions found</h3>
+                  <p className="text-slate-500">Try adjusting your search or filter criteria</p>
+                </div>
               ) : (
-                <ul className="space-y-2">
+                <div className="space-y-3">
                   {filtered.map((q) => (
-                    <li
+                    <div
                       key={q._id}
-                      className="p-3 bg-white border rounded hover:shadow-sm cursor-pointer transition flex items-center justify-between"
+                      className="group p-5 bg-white rounded-xl border border-slate-200 hover:border-indigo-300 hover:shadow-lg cursor-pointer transition-all duration-200"
                       onClick={() => handleQuestionSelect(q._id)}
                     >
-                      <div className="min-w-0">
-                        <div className="font-medium truncate">{q.title}</div>
-                        <div className="mt-1 text-xs text-gray-500 flex items-center gap-2">
-                          <span
-                            className={`px-2 py-0.5 rounded border ${
-                              q.difficulty === "Easy"
-                                ? "bg-green-50 border-green-200 text-green-700"
-                                : q.difficulty === "Medium"
-                                ? "bg-yellow-50 border-yellow-200 text-yellow-700"
-                                : "bg-red-50 border-red-200 text-red-700"
-                            }`}
-                          >
-                            {q.difficulty}
-                          </span>
-                          {typeof q.totalScore === "number" && (
-                            <span className="px-2 py-0.5 rounded border bg-gray-50 text-gray-700">
-                              {q.totalScore} pts
+                      <div className="flex items-start justify-between">
+                        <div className="flex-1 min-w-0">
+                          <h3 className="text-base font-semibold text-slate-900 group-hover:text-indigo-700 transition-colors line-clamp-2">
+                            {q.title}
+                          </h3>
+                          <div className="mt-3 flex items-center gap-2 flex-wrap">
+                            <span
+                              className={`inline-flex items-center px-3 py-1 rounded-full text-xs font-medium ${
+                                q.difficulty === "Easy"
+                                  ? "bg-emerald-100 text-emerald-700"
+                                  : q.difficulty === "Medium"
+                                  ? "bg-amber-100 text-amber-700"
+                                  : "bg-red-100 text-red-700"
+                              }`}
+                            >
+                              {q.difficulty}
                             </span>
-                          )}
+                            {typeof q.totalScore === "number" && (
+                              <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-medium bg-slate-100 text-slate-700">
+                                {q.totalScore} points
+                              </span>
+                            )}
+                            {q.tags && q.tags.length > 0 && (
+                              <div className="flex items-center gap-1">
+                                {q.tags.slice(0, 2).map((tag, idx) => (
+                                  <span
+                                    key={idx}
+                                    className="inline-flex items-center px-2 py-1 rounded text-xs bg-indigo-50 text-indigo-600"
+                                  >
+                                    {tag}
+                                  </span>
+                                ))}
+                                {q.tags.length > 2 && (
+                                  <span className="text-xs text-slate-500">+{q.tags.length - 2} more</span>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                        <div className="flex-shrink-0 ml-4">
+                          <div className="w-8 h-8 rounded-full bg-slate-100 group-hover:bg-indigo-100 flex items-center justify-center transition-colors">
+                            <svg
+                              className="w-4 h-4 text-slate-400 group-hover:text-indigo-600 transition-colors"
+                              fill="none"
+                              stroke="currentColor"
+                              viewBox="0 0 24 24"
+                            >
+                              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
+                            </svg>
+                          </div>
                         </div>
                       </div>
-                      <div className="flex-shrink-0 ml-3">
-                        <svg
-                          className="w-5 h-5 text-gray-400"
-                          fill="none"
-                          stroke="currentColor"
-                          strokeWidth="2"
-                          viewBox="0 0 24 24"
-                        >
-                          <path d="M9 5l7 7-7 7" />
-                        </svg>
-                      </div>
-                    </li>
+                    </div>
                   ))}
-                </ul>
+                </div>
               )}
             </div>
           </div>
@@ -250,53 +300,74 @@ function MainCodingApp() {
         {activeTab === "details" && (
           <div className="flex-1 overflow-auto">
             {selectedQuestion ? (
-              <div className="p-4 space-y-3">
-                <div className="flex items-start justify-between gap-3">
-                  <h3 className="text-lg font-semibold">{selectedQuestion.title}</h3>
-                  <span
-                    className={`px-2 py-0.5 text-sm rounded border ${
-                      selectedQuestion.difficulty === "Easy"
-                        ? "bg-green-50 border-green-200 text-green-700"
-                        : selectedQuestion.difficulty === "Medium"
-                        ? "bg-yellow-50 border-yellow-200 text-yellow-700"
-                        : "bg-red-50 border-red-200 text-red-700"
-                    }`}
-                  >
-                    {selectedQuestion.difficulty}
-                  </span>
-                </div>
-
-                {selectedQuestion.tags?.length ? (
-                  <div className="flex flex-wrap gap-2">
-                    {selectedQuestion.tags.map((t) => (
+              <div className="p-6 space-y-6">
+                {/* Question Header */}
+                <div className="space-y-4">
+                  <div className="flex items-start justify-between gap-4">
+                    <h3 className="text-xl font-bold text-slate-900 leading-tight">{selectedQuestion.title}</h3>
+                    <div className="flex items-center gap-2">
                       <span
-                        key={t}
-                        className="text-xs px-2 py-0.5 rounded border bg-indigo-50 border-indigo-200 text-indigo-700"
+                        className={`inline-flex items-center px-3 py-1 rounded-full text-sm font-medium ${
+                          selectedQuestion.difficulty === "Easy"
+                            ? "bg-emerald-100 text-emerald-700"
+                            : selectedQuestion.difficulty === "Medium"
+                            ? "bg-amber-100 text-amber-700"
+                            : "bg-red-100 text-red-700"
+                        }`}
                       >
-                        {t}
+                        {selectedQuestion.difficulty}
                       </span>
-                    ))}
+                      {typeof selectedQuestion.totalScore === "number" && (
+                        <span className="inline-flex items-center px-3 py-1 rounded-full text-sm font-medium bg-slate-100 text-slate-700">
+                          {selectedQuestion.totalScore} points
+                        </span>
+                      )}
+                    </div>
                   </div>
-                ) : null}
 
-                <div className="whitespace-pre-wrap text-sm bg-white border rounded p-3">
-                  {selectedQuestion.description || "—"}
+                  {selectedQuestion.tags?.length ? (
+                    <div className="flex flex-wrap gap-2">
+                      {selectedQuestion.tags.map((t) => (
+                        <span
+                          key={t}
+                          className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-indigo-50 text-indigo-600"
+                        >
+                          {t}
+                        </span>
+                      ))}
+                    </div>
+                  ) : null}
                 </div>
 
+                {/* Question Description */}
+                <div className="bg-white rounded-xl border border-slate-200 p-6">
+                  <h4 className="text-lg font-semibold text-slate-900 mb-3">Problem Description</h4>
+                  <div className="whitespace-pre-wrap text-slate-700 leading-relaxed">
+                    {selectedQuestion.description || "No description available."}
+                  </div>
+                </div>
+
+                {/* Sample Input/Output */}
                 {(selectedQuestion.sampleInput || selectedQuestion.sampleOutput) && (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
                     {selectedQuestion.sampleInput && (
-                      <div>
-                        <div className="font-semibold mb-1 text-sm">Sample Input</div>
-                        <pre className="bg-white border rounded p-2 whitespace-pre-wrap text-sm">
+                      <div className="bg-white rounded-xl border border-slate-200 p-6">
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="w-2 h-2 bg-green-500 rounded-full"></div>
+                          <h4 className="font-semibold text-slate-900">Sample Input</h4>
+                        </div>
+                        <pre className="bg-slate-50 rounded-lg p-4 whitespace-pre-wrap text-sm text-slate-700 font-mono border">
                           {selectedQuestion.sampleInput}
                         </pre>
                       </div>
                     )}
                     {selectedQuestion.sampleOutput && (
-                      <div>
-                        <div className="font-semibold mb-1 text-sm">Sample Output</div>
-                        <pre className="bg-white border rounded p-2 whitespace-pre-wrap text-sm">
+                      <div className="bg-white rounded-xl border border-slate-200 p-6">
+                        <div className="flex items-center gap-2 mb-3">
+                          <div className="w-2 h-2 bg-blue-500 rounded-full"></div>
+                          <h4 className="font-semibold text-slate-900">Sample Output</h4>
+                        </div>
+                        <pre className="bg-slate-50 rounded-lg p-4 whitespace-pre-wrap text-sm text-slate-700 font-mono border">
                           {selectedQuestion.sampleOutput}
                         </pre>
                       </div>
@@ -304,29 +375,46 @@ function MainCodingApp() {
                   </div>
                 )}
 
-                <div className="grid grid-cols-3 gap-2">
-                  <div className="bg-white border rounded p-2 text-sm">
-                    <div className="font-semibold">Time Limit</div>
-                    <div>{selectedQuestion.timeLimit}s</div>
+                {/* Constraints & Limits */}
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="font-semibold text-slate-900">Time Limit</span>
+                    </div>
+                    <div className="text-slate-700">{selectedQuestion.timeLimit || selectedQuestion.timeAllowed || "N/A"}s</div>
                   </div>
-                  <div className="bg-white border rounded p-2 text-sm">
-                    <div className="font-semibold">Memory Limit</div>
-                    <div>{selectedQuestion.memoryLimit} MB</div>
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7v10c0 2.21 3.582 4 8 4s8-1.79 8-4V7M4 7c0 2.21 3.582 4 8 4s8-1.79 8-4M4 7c0-2.21 3.582-4 8-4s8 1.79 8 4" />
+                      </svg>
+                      <span className="font-semibold text-slate-900">Memory Limit</span>
+                    </div>
+                    <div className="text-slate-700">{selectedQuestion.memoryLimit || "N/A"} MB</div>
                   </div>
-                  <div className="bg-white border rounded p-2 text-sm">
-                    <div className="font-semibold">Max Code Size</div>
-                    <div>{selectedQuestion.maxCodeSize} KB</div>
+                  <div className="bg-white rounded-xl border border-slate-200 p-4">
+                    <div className="flex items-center gap-2 mb-2">
+                      <svg className="w-4 h-4 text-slate-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                      </svg>
+                      <span className="font-semibold text-slate-900">Max Code Size</span>
+                    </div>
+                    <div className="text-slate-700">{selectedQuestion.maxCodeSize || "N/A"} KB</div>
                   </div>
                 </div>
 
+                {/* Available Languages */}
                 {selectedQuestion.languages?.length ? (
-                  <div>
-                    <div className="font-semibold mb-1 text-sm">Available Languages</div>
+                  <div className="bg-white rounded-xl border border-slate-200 p-6">
+                    <h4 className="text-lg font-semibold text-slate-900 mb-3">Available Languages</h4>
                     <div className="flex flex-wrap gap-2">
                       {selectedQuestion.languages.map((l) => (
                         <span
                           key={l.languageId}
-                          className="bg-gray-100 border border-gray-200 text-gray-700 text-xs rounded px-2 py-1"
+                          className="inline-flex items-center px-3 py-1 rounded-full text-sm bg-slate-100 text-slate-700"
                         >
                           {l.languageName}
                         </span>
@@ -335,13 +423,29 @@ function MainCodingApp() {
                   </div>
                 ) : null}
 
-                <div className="text-xs text-gray-500">
-                  Tip: Use the “Questions” tab to switch problems quickly.
-                </div>
+                {/* Time Limit Warning */}
+                {selectedQuestion.timeAllowed && (
+                  <div className="bg-amber-50 border border-amber-200 rounded-xl p-4">
+                    <div className="flex items-center gap-2">
+                      <svg className="w-5 h-5 text-amber-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                      </svg>
+                      <span className="text-sm font-medium text-amber-800">
+                        Time Limit: {selectedQuestion.timeAllowed} minutes
+                      </span>
+                    </div>
+                  </div>
+                )}
               </div>
             ) : (
-              <div className="h-full flex items-center justify-center text-gray-500">
-                Select a question from the “Questions” tab.
+              <div className="flex flex-col items-center justify-center h-full text-center p-6">
+                <div className="w-16 h-16 bg-slate-100 rounded-full flex items-center justify-center mb-4">
+                  <svg className="w-8 h-8 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 12h6m-6 4h6m2 5H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
+                  </svg>
+                </div>
+                <h3 className="text-lg font-medium text-slate-900 mb-2">Select a Question</h3>
+                <p className="text-slate-500">Choose a question from the list to view its details</p>
               </div>
             )}
           </div>
@@ -374,7 +478,7 @@ export default function App() {
       <TopNav />
       <Routes>
         <Route path="/" element={<MainCodingApp />} />
-        <Route path="/replay" element={<SessionReplay apiBaseUrl={API_BASE_URL} />} />
+        <Route path="/replay" element={<EnhancedSessionReplay apiBaseUrl={API_BASE_URL} />} />
         <Route path="/ai-questions" element={<AIQuestionsManager />} />
       </Routes>
     </BrowserRouter>
