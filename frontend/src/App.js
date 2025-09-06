@@ -5,14 +5,18 @@ import axios from "axios";
 import "./App.css";
 import Judge0Editor from "./components/Judge0Editor";
 import SessionReplay from "./components/SessionReplay";
+import AIQuestionsManager from "./components/AIQuestionsManager";
 
 const LS_KEY = "ui:leftWidth";
-const API_BASE_URL = "https://coding-platform-teq9.onrender.com/api";
+const API_BASE_URL = process.env.REACT_APP_API_BASE_URL || "http://localhost:5050/api";
 
 // ---------------------- Top Nav ----------------------
 function TopNav() {
   const loc = useLocation();
   const atReplay = loc.pathname.startsWith("/replay");
+  const atAIQuestions = loc.pathname.startsWith("/ai-questions");
+  const atMain = loc.pathname === "/";
+  
   return (
     <div className="w-full border-b bg-white">
       <div className="mx-auto max-w-screen-2xl px-4 py-2 flex items-center gap-3">
@@ -20,7 +24,7 @@ function TopNav() {
         <Link
           to="/"
           className={`px-3 py-1 rounded border text-sm ${
-            !atReplay ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100"
+            atMain ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100"
           }`}
         >
           Solve
@@ -32,6 +36,14 @@ function TopNav() {
           }`}
         >
           Session Replay
+        </Link>
+        <Link
+          to="/ai-questions"
+          className={`px-3 py-1 rounded border text-sm ${
+            atAIQuestions ? "bg-indigo-50 border-indigo-200 text-indigo-700" : "bg-gray-100"
+          }`}
+        >
+          AI Questions
         </Link>
         <div className="ml-auto text-xs text-gray-500">
           API: <code>{API_BASE_URL.replace(/^https?:\/\//, "")}</code>
@@ -363,6 +375,7 @@ export default function App() {
       <Routes>
         <Route path="/" element={<MainCodingApp />} />
         <Route path="/replay" element={<SessionReplay apiBaseUrl={API_BASE_URL} />} />
+        <Route path="/ai-questions" element={<AIQuestionsManager />} />
       </Routes>
     </BrowserRouter>
   );

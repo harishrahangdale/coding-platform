@@ -5,14 +5,24 @@ const axios = require("axios");
 require("dotenv").config();
 
 const Question = require("./models/Question");
+const AIQuestions = require("./models/AIQuestions");
 const Scaffold = require("./models/Scaffold");
 const Submission = require("./models/Submission");
 const SubmissionDraft = require("./models/SubmissionDraft");
 const EditorSession = require("./models/EditorSession");
 
 const app = express();
+// CORS configuration based on environment
+const allowedOrigins = process.env.NODE_ENV === 'production' 
+  ? [process.env.FRONTEND_URL]
+  : [
+      process.env.DEV_FRONTEND_URL || "http://localhost:3000",
+      process.env.DEV_FRONTEND_URL_ALT || "http://127.0.0.1:3000",
+      process.env.FRONTEND_URL
+    ].filter(Boolean);
+
 app.use(cors({
-  origin: "https://friendly-youtiao-9b4c9c.netlify.app"
+  origin: allowedOrigins
 }));
 app.use(express.json());
 
@@ -33,13 +43,134 @@ const mapQuestionListItem = (q, languages = []) => ({
 });
 
 const judge0 = axios.create({
-  baseURL: "https://judge0-ce.p.rapidapi.com",
+  baseURL: process.env.JUDGE0_BASE_URL || "https://judge0-ce.p.rapidapi.com",
   headers: {
     "Content-Type": "application/json",
     "X-RapidAPI-Key": process.env.JUDGE0_API_KEY,
-    "X-RapidAPI-Host": "judge0-ce.p.rapidapi.com",
+    "X-RapidAPI-Host": process.env.JUDGE0_HOST || "judge0-ce.p.rapidapi.com",
   },
 });
+
+// ======================================================
+// AI QUESTIONS MANAGEMENT
+// ======================================================
+
+// List AI questions
+app.get("/api/ai-questions", async (req, res) => {
+  try {
+    const { page = 1, limit = 20, difficulty, search } = req.query;
+    const skip = (parseInt(page) - 1) * parseInt(limit);
+    
+    // Build filter
+    const filter = {};
+    if (difficulty && difficulty !== 'All') {
+      filter.difficulty = difficulty;
+    }
+    if (search) {
+      filter.$or = [
+        { title: { $regex: search, $options: 'i' } },
+        { description: { $regex: search, $options: 'i' } },
+        { tags: { $in: [new RegExp(search, 'i')] } }
+      ];
+    }
+
+    const [questions, total] = await Promise.all([
+      AIQuestions.find(filter)
+        .sort({ createdAt: -1 })
+        .skip(skip)
+        .limit(parseInt(limit))
+        .lean(),
+      AIQuestions.countDocuments(filter)
+    ]);
+
+    const questionsWithScore = questions.map(q => ({
+      ...q,
+      totalScore: Array.isArray(q.testCases) ? q.testCases.reduce((s, t) => s + (t.score || 0), 0) : 0
+    }));
+
+    res.json({
+      questions: questionsWithScore,
+      pagination: {
+        page: parseInt(page),
+        limit: parseInt(limit),
+        total,
+        pages: Math.ceil(total / parseInt(limit))
+      }
+    });
+  } catch (err) {
+    console.error("GET /api/ai-questions error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Get single AI question details
+app.get("/api/ai-questions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid question ID format" });
+    }
+    
+    const question = await AIQuestions.findById(id).lean();
+    if (!question) return res.status(404).json({ error: "Question not found" });
+
+    const totalScore = (question.testCases || []).reduce((s, t) => s + (t.score || 0), 0);
+    res.json({
+      ...question,
+      totalScore
+    });
+  } catch (err) {
+    console.error("GET /api/ai-questions/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Delete AI question
+app.delete("/api/ai-questions/:id", async (req, res) => {
+  try {
+    const { id } = req.params;
+    if (!mongoose.Types.ObjectId.isValid(id)) {
+      return res.status(400).json({ error: "Invalid question ID format" });
+    }
+
+    const question = await AIQuestions.findByIdAndDelete(id);
+    if (!question) return res.status(404).json({ error: "Question not found" });
+
+    res.json({ message: "Question deleted successfully" });
+  } catch (err) {
+    console.error("DELETE /api/ai-questions/:id error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// Delete multiple AI questions
+app.delete("/api/ai-questions", async (req, res) => {
+  try {
+    const { ids } = req.body;
+    if (!Array.isArray(ids) || ids.length === 0) {
+      return res.status(400).json({ error: "ids array is required" });
+    }
+
+    // Validate all IDs
+    const validIds = ids.filter(id => mongoose.Types.ObjectId.isValid(id));
+    if (validIds.length !== ids.length) {
+      return res.status(400).json({ error: "Some IDs are invalid" });
+    }
+
+    const result = await AIQuestions.deleteMany({ _id: { $in: validIds } });
+    res.json({ 
+      message: `${result.deletedCount} questions deleted successfully`,
+      deletedCount: result.deletedCount
+    });
+  } catch (err) {
+    console.error("DELETE /api/ai-questions error:", err);
+    res.status(500).json({ error: "Server error" });
+  }
+});
+
+// ======================================================
+// REGULAR QUESTIONS
+// ======================================================
 
 // ---- Questions list ----
 app.get("/api/questions", async (req, res) => {
