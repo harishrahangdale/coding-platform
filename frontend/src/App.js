@@ -59,7 +59,7 @@ function MainCodingApp() {
   const [selectedQuestion, setSelectedQuestion] = useState(null);
   const [activeTab, setActiveTab] = useState("list"); // 'list' | 'details'
   const [search, setSearch] = useState("");
-  const [difficulty, setDifficulty] = useState("All");
+  const [difficulty, setDifficulty] = useState("All Difficulties");
 
   // ----- Resizable split state -----
   const [leftWidth, setLeftWidth] = useState(() => {
@@ -120,7 +120,7 @@ function MainCodingApp() {
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
     return questions.filter((it) => {
-      const dOk = difficulty === "All" || it.difficulty === difficulty;
+      const dOk = difficulty === "All Difficulties" || it.difficulty === difficulty;
       const sOk =
         !q ||
         it.title?.toLowerCase().includes(q) ||
@@ -198,19 +198,27 @@ function MainCodingApp() {
                     onChange={(e) => setSearch(e.target.value)}
                   />
                 </div>
-                <div className="flex items-center gap-3">
-                  <select
-                    className="px-4 py-3 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-colors bg-white"
-                    value={difficulty}
-                    onChange={(e) => setDifficulty(e.target.value)}
-                  >
-                    <option>All Difficulties</option>
-                    <option>Easy</option>
-                    <option>Medium</option>
-                    <option>Hard</option>
-                  </select>
-                  <div className="text-sm text-slate-500">
-                    {filtered.length} of {questions.length} questions
+                <div className="flex items-center gap-4">
+                  <div className="relative">
+                    <select
+                      className="appearance-none px-4 py-3 pr-10 border border-slate-300 rounded-xl focus:ring-2 focus:ring-indigo-500 focus:border-indigo-500 transition-all duration-200 bg-white text-slate-700 font-medium cursor-pointer hover:border-slate-400 shadow-sm"
+                      value={difficulty}
+                      onChange={(e) => setDifficulty(e.target.value)}
+                    >
+                      <option value="All Difficulties">All Difficulties</option>
+                      <option value="Easy">Easy</option>
+                      <option value="Medium">Medium</option>
+                      <option value="Hard">Hard</option>
+                    </select>
+                    <div className="absolute inset-y-0 right-0 flex items-center pr-3 pointer-events-none">
+                      <svg className="w-5 h-5 text-slate-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+                      </svg>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 text-sm text-slate-500">
+                    <div className="w-2 h-2 bg-indigo-500 rounded-full"></div>
+                    <span>{filtered.length} of {questions.length} questions</span>
                   </div>
                 </div>
               </div>

@@ -954,13 +954,14 @@ Be thorough but concise. Focus on logical correctness, algorithm efficiency, and
             try {
               // First try to extract JSON from markdown code blocks
               let jsonStr = analysisText;
+              let jsonMatch;
               if (analysisText.includes('```json')) {
-                const jsonMatch = analysisText.match(/```json\s*([\s\S]*?)\s*```/);
+                jsonMatch = analysisText.match(/```json\s*([\s\S]*?)\s*```/);
                 if (jsonMatch) {
                   jsonStr = jsonMatch[1].trim();
                 }
               } else {
-                const jsonMatch = analysisText.match(/\{[\s\S]*\}/);
+                jsonMatch = analysisText.match(/\{[\s\S]*\}/);
                 if (jsonMatch) {
                   jsonStr = jsonMatch[0];
                 }
